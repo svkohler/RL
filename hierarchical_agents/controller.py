@@ -344,11 +344,9 @@ class Rob_controller():
         # Compute Q-values for current states
         q_values = self.policy(previous_states).squeeze().gather(1, actions[:, -1].unsqueeze(1))
 
-
         # Compute target Q-values using the target network
         with torch.no_grad():
             max_next_q_values = self.target_network(next_states).squeeze().max(1)[0]
-            print(max_next_q_values.size())
             target_q_values = rewards[:, -1].squeeze() + gamma * max_next_q_values * (1 - dones[:, -1].squeeze())
 
         return nn.MSELoss()(q_values, target_q_values)
