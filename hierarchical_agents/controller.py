@@ -91,23 +91,15 @@ class Rob_controller():
         # with torch.no_grad():
         # random choice (when you want to skip random choice, then choose epsilon == 0.0 (default))
         if random.random() < epsilon:
-            print("random action")
             return np.random.choice(action_space)  # Explore
         else:
-            print("policy action")
             state = torch.FloatTensor(state_sequence_buffer[3]).unsqueeze(0).to(self.device)
             
-            start_time = time.time()
             output = self.policy(state)
-            print(f"Action selection: {time.time() - start_time:.6f} seconds")
 
             # choose either the max or according to probabilities
-
-            start_time = time.time()
             if mode == "max":
-                max = torch.argmax(output).item()  # Exploit
-                print(f"Finding the max: {time.time() - start_time:.6f} seconds")   
-                return max
+                return torch.argmax(output).item()  # Exploit
             if mode == "probs":
                 probabilities = np.array(output.detach().flatten())
                 assert np.sum(probabilities) == 1.0, "Sum of probabilites has to be 1!"
@@ -205,14 +197,7 @@ class Rob_controller():
 
                 self.state_stats.update(self.return_state(as_list=True))
 
-                start_time_total = time.time()
-                start_time = time.time()
-                ssb =state_sequence_buffer.content()
-                print(f"SSB content: {time.time() - start_time:.6f} seconds")
-
-                action_taken = self.select_action(ssb, epsilon=epsilon)
-                print(f"Total action selection: {time.time() - start_time_total:.6f} seconds. Total steps: {total_steps}. Episode steps: {episode_steps}")
-
+                action_taken = self.select_action(state_sequence_buffer.content(), epsilon=epsilon)
 
                 # execute that action
                 self.lower.do({"steer": INT_2_DIR[action_taken]})
@@ -234,12 +219,17 @@ class Rob_controller():
 
                 # compute loss each 5th step
                 if total_steps % 2 == 0:
+                    torch.cuda.synchronize()
+                    start_time = time.time()
                     loss = self.compute_dqn_loss(memory_replay_buffer, batch_size)
 
                     if loss is not None:
                         self.optimizer.zero_grad()
                         loss.backward()
                         self.optimizer.step()
+                    torch.cuda.synchronize()
+                    print(f"time for loss and backprob: {round(time.time()- start_time, 5)}")
+
 
                 # update target network after 10k steps
                 if total_steps % 10000 == 0:
@@ -361,7 +351,6 @@ class Rob_controller():
     def compute_dqn_loss(self, memory_replay, batch_size, gamma = 0.95):
         if len(memory_replay) < batch_size:
             return
-        
         previous_states, actions, rewards, next_states, dones = memory_replay.sample(batch_size)
 
         # Compute Q-values for current states
@@ -372,7 +361,7 @@ class Rob_controller():
             max_next_q_values = self.target_network(next_states).squeeze().max(1)[0]
             target_q_values = rewards[:, -1].squeeze() + gamma * max_next_q_values * (1 - dones[:, -1].squeeze())
 
-        return nn.MSELoss()(q_values, target_q_values)
+        return nn.MSELoss()(q_values.squeeze(), target_q_values)
 
     def compute_reinforce_loss(self, policy, states, actions, rewards, gamma=0.99):
         """
