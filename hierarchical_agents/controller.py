@@ -88,21 +88,31 @@ class Rob_controller():
     
     # Function to choose action using epsilon-greedy policy
     def select_action(self, state_sequence_buffer, action_space=[0,1,2,3], epsilon=0.0, mode="max"):
-        with torch.no_grad():
-            # random choice (when you want to skip random choice, then choose epsilon == 0.0 (default))
-            if random.random() < epsilon:
-                return np.random.choice(action_space)  # Explore
-            else:
-                state = torch.FloatTensor(state_sequence_buffer[3]).unsqueeze(0).to(self.device)
-                
-                output = self.policy(state)
-                # choose either the max or according to probabilities
-                if mode == "max":
-                    return torch.argmax(output).item()  # Exploit
-                if mode == "probs":
-                    probabilities = np.array(output.detach().flatten())
-                    assert np.sum(probabilities) == 1.0, "Sum of probabilites has to be 1!"
-                    return np.random.choice(action_space, p=probabilities)
+        # with torch.no_grad():
+        # random choice (when you want to skip random choice, then choose epsilon == 0.0 (default))
+        if random.random() < epsilon:
+            print("random action")
+            return np.random.choice(action_space)  # Explore
+        else:
+            print("policy action")
+            state = torch.FloatTensor(state_sequence_buffer[3]).unsqueeze(0).to(self.device)
+            
+            start_time = time.time()
+            output = self.policy(state)
+            print(f"Action selection: {time.time() - start_time:.6f} seconds")
+
+            # choose either the max or according to probabilities
+
+            start_time = time.time()
+            if mode == "max":
+                max = torch.argmax(output).item()  # Exploit
+                print(f"Finding the max: {time.time() - start_time:.6f} seconds")   
+                return max
+            if mode == "probs":
+                probabilities = np.array(output.detach().flatten())
+                assert np.sum(probabilities) == 1.0, "Sum of probabilites has to be 1!"
+                return np.random.choice(action_space, p=probabilities)
+
 
     def do(self, world, body, action, sequence_length, standardized):
 
@@ -149,16 +159,12 @@ class Rob_controller():
                 world="sinple"
                 ):
         # set the policy in training mode
-        start_time = time.time()
         self.policy.train()
-        print(f"Policy train mode setup: {time.time() - start_time:.6f} seconds")
 
         # initialize the target network and load weights from policy network
-        start_time = time.time()
         self.target_network = copy.deepcopy(self.policy).to(self.device)
         self.target_network.load_state_dict(self.policy.state_dict())
         self.target_network.eval()
-        print(f"Target network initialization: {time.time() - start_time:.6f} seconds")
         
         # init variables to keep track of metrics/simulations
         number_of_sims = 0
@@ -166,35 +172,24 @@ class Rob_controller():
         metric_coll = []
         metric_coll_ma = []
 
-        start_time = time.time()
         memory_replay_buffer = OptimizedSequenceMemoryBuffer(memory_length, sequence_length, self.input_size, self.device)
         state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
-        print(f"Memory buffer initialization: {time.time() - start_time:.6f} seconds")
 
         while number_of_sims <= simulations:
+
             number_of_sims += 1
 
-            start_time = time.time()
             state_sequence_buffer.empty()
-            print(f"State sequence buffer emptying: {time.time() - start_time:.6f} seconds")
 
             # each simulation has a specific goal, set of walls and initial starting point
-            start_time = time.time()
             w, starting_point = generate_world(mode=world, n_walls=n_walls)
             self.current_goal = w.goal
-            print(f"World generation: {time.time() - start_time:.6f} seconds")
 
-            start_time = time.time()
             self.lower = Rob_body(w, init_pos=starting_point, fuel_tank=fuel)
-            print(f"Robot body initialization: {time.time() - start_time:.6f} seconds")
 
-            start_time = time.time()
             self.state = self.return_state(as_list=True, standardized=standardized)
-            print(f"Initial state retrieval: {time.time() - start_time:.6f} seconds")
 
-            start_time = time.time()
             self.policy.reset()
-            print(f"Policy reset: {time.time() - start_time:.6f} seconds")
 
             # initialize run vars
             done = False
@@ -202,72 +197,57 @@ class Rob_controller():
             episode_steps = 0
 
             while not done:
+
                 total_steps += 1
                 episode_steps += 1
 
                 self.previous_state = self.state
 
-                start_time = time.time()
                 self.state_stats.update(self.return_state(as_list=True))
-                print(f"State stats update: {time.time() - start_time:.6f} seconds")
 
+                start_time_total = time.time()
                 start_time = time.time()
-                action_taken = self.select_action(state_sequence_buffer.content(), epsilon=epsilon)
-                print(f"Action selection: {time.time() - start_time:.6f} seconds")
+                ssb =state_sequence_buffer.content()
+                print(f"SSB content: {time.time() - start_time:.6f} seconds")
+
+                action_taken = self.select_action(ssb, epsilon=epsilon)
+                print(f"Total action selection: {time.time() - start_time_total:.6f} seconds. Total steps: {total_steps}. Episode steps: {episode_steps}")
+
 
                 # execute that action
-                start_time = time.time()
                 self.lower.do({"steer": INT_2_DIR[action_taken]})
-                print(f"Action execution: {time.time() - start_time:.6f} seconds")
 
-                start_time = time.time()
                 self.state = self.return_state(as_list=True, standardized=standardized)
-                print(f"State retrieval after action: {time.time() - start_time:.6f} seconds")
 
-                start_time = time.time()
                 reward = self.reward()
-                print(f"Reward computation: {time.time() - start_time:.6f} seconds")
 
                 episode_reward += reward
 
-                start_time = time.time()
                 self.check_arrived()
-                print(f"Check arrived status: {time.time() - start_time:.6f} seconds")
 
                 done = self.lower.fuel == 0 or self.lower.arrived or self.lower.crashed
 
-                start_time = time.time()
                 state_sequence_buffer.add((self.previous_state, action_taken, reward, self.state, done))
-                print(f"Add to state sequence buffer: {time.time() - start_time:.6f} seconds")
 
                 if len(state_sequence_buffer) == sequence_length:
-                    start_time = time.time()
                     memory_replay_buffer.add(state_sequence_buffer.content())
-                    print(f"Add to memory replay buffer: {time.time() - start_time:.6f} seconds")
 
                 # compute loss each 5th step
-                if total_steps % 5 == 0:
-                    start_time = time.time()
+                if total_steps % 2 == 0:
                     loss = self.compute_dqn_loss(memory_replay_buffer, batch_size)
-                    print(f"Loss computation: {time.time() - start_time:.6f} seconds")
 
                     if loss is not None:
-                        start_time = time.time()
                         self.optimizer.zero_grad()
                         loss.backward()
                         self.optimizer.step()
-                        print(f"Optimizer step: {time.time() - start_time:.6f} seconds")
 
                 # update target network after 10k steps
                 if total_steps % 10000 == 0:
-                    start_time = time.time()
                     self.target_network.load_state_dict(self.policy.state_dict())
                     epsilon = max(epsilon_min, (epsilon * epsilon_decay))
-                    print(f"Target network update and epsilon decay: {time.time() - start_time:.6f} seconds")
 
-            start_time = time.time()
+
             self.lower.check_status(id=number_of_sims, reward=episode_reward)
-            print(f"Check status: {time.time() - start_time:.6f} seconds")
 
             metric_coll.append(episode_reward / episode_steps)
 
@@ -275,15 +255,14 @@ class Rob_controller():
                 start_time = time.time()
                 metric_coll_ma.append((sum(metric_coll[-1000:])) / min(len(metric_coll), 1000))
                 pmetric = Plot_metric(metric_coll_ma, y_label="step reward", x_label="episodes", title="avg. reward per step")
-                print(f"Metric collection and plotting: {time.time() - start_time:.6f} seconds")
 
             if number_of_sims % 250 == 0:      
                 start_time = time.time()
                 pl = Plot_env(w, self.lower)
                 self.save_policy_stats(self.path_to_weights + "tmp/")
-                print(f"Environment plotting and saving policy stats: {time.time() - start_time:.6f} seconds")
                 print(f"Current learning rate: {self.lr_scheduler.get_last_lr()}.")
                 print(f"Current epsilon: {epsilon}.")
+
 
 
 
