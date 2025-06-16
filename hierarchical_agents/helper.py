@@ -1,6 +1,8 @@
 import math
 from typing import Tuple
 import torch
+import numpy as np
+import random
 
 
 def is_intersection(linea: Tuple[Tuple[float, float]], lineb: Tuple[Tuple[float, float]], get_point=False):
@@ -104,3 +106,154 @@ class RunningStatsState:
     def destandardize(self, state):
         mean, std = self.get_mean_std()
         return (torch.Tensor(state)*std) + mean
+
+
+class OptimizedSequenceMemoryBuffer:
+    def __init__(self, capacity, sequence_length, state_dim, device="cpu"):
+        """
+        Optimized memory buffer for sequences.
+
+        Args:
+        - capacity (int): Maximum number of sequences the buffer can hold.
+        - sequence_length (int): Length of each sequence.
+        - state_dim (int): Dimensionality of the state.
+        """
+        self.capacity = capacity
+        self.sequence_length = sequence_length
+        self.state_dim = state_dim
+        self.size = 0
+        self.index = 0
+        self.device = device
+
+        # Preallocate memory for the buffer
+        self.previous_states = np.zeros((capacity, sequence_length, state_dim), dtype=np.float32)
+        self.actions = np.zeros((capacity, sequence_length), dtype=np.int64)
+        self.rewards = np.zeros((capacity, sequence_length), dtype=np.float32)
+        self.next_states = np.zeros((capacity, sequence_length, state_dim), dtype=np.float32)
+        self.dones = np.zeros((capacity, sequence_length), dtype=np.float32)
+
+    def add(self, sequence):
+        """
+        Add a sequence of experiences to the buffer.
+
+        Args:
+        - sequence (tuple): A tuple containing (previous_states, actions, rewards, next_states, dones).
+          Each component must have a shape of (sequence_length, ...).
+        """
+        previous_states, actions, rewards, next_states, dones = sequence
+
+        # Store the sequence in the preallocated arrays
+        self.previous_states[self.index] = previous_states
+        self.actions[self.index] = actions
+        self.rewards[self.index] = rewards
+        self.next_states[self.index] = next_states
+        self.dones[self.index] = dones
+
+        # Update the index and size
+        self.index = (self.index + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size):
+        """
+        Sample a batch of sequences from the buffer.
+
+        Args:
+        - batch_size (int): Number of sequences to sample.
+
+        Returns:
+        - A tuple of tensors (previous_states, actions, rewards, next_states, dones).
+        """
+        indices = random.sample(range(self.size), batch_size)
+
+        # Use indexing to quickly fetch the batch
+        previous_states = torch.tensor(self.previous_states[indices], dtype=torch.float32).to(self.device)
+        actions = torch.tensor(self.actions[indices], dtype=torch.long).to(self.device)
+        rewards = torch.tensor(self.rewards[indices], dtype=torch.float32).to(self.device)
+        next_states = torch.tensor(self.next_states[indices], dtype=torch.float32).to(self.device)
+        dones = torch.tensor(self.dones[indices], dtype=torch.float32).to(self.device)
+
+        return previous_states, actions, rewards, next_states, dones
+
+    def __len__(self):
+        """
+        Get the current size of the buffer.
+
+        Returns:
+        - int: Number of sequences currently stored in the buffer.
+        """
+        return self.size
+
+
+class OptimizedSequenceBuffer:
+    def __init__(self, capacity, state_dim, device="cpu"):
+        """
+        Optimized sequence buffer.
+
+        Args:
+        - capacity (int): Length of sequences the buffer holds.
+        - state_dim (int): Dimensionality of the state.
+        """
+        self.capacity = capacity
+        self.state_dim = state_dim
+        self.size = 0
+        self.index = 0
+        self.device = device
+
+        # Preallocate memory for the buffer
+        self.previous_states = np.zeros((capacity, state_dim), dtype=np.float32)
+        self.actions = np.zeros((capacity), dtype=np.int64)
+        self.rewards = np.zeros((capacity), dtype=np.float32)
+        self.next_states = np.zeros((capacity, state_dim), dtype=np.float32)
+        self.dones = np.zeros((capacity), dtype=np.float32)
+
+    def add(self, step_tuple):
+        """
+        Add a step tuple of to the sequence buffer.
+
+        Args:
+        - step_tuple (tuple): A tuple containing (previous_state, action, reward, next_state, done).
+        """
+        previous_states, actions, rewards, next_states, dones = step_tuple
+
+        # Store the sequence in the preallocated arrays
+        self.previous_states[self.index] = previous_states
+        self.actions[self.index] = actions
+        self.rewards[self.index] = rewards
+        self.next_states[self.index] = next_states
+        self.dones[self.index] = dones
+
+        # Update the index and size
+        self.index = (self.index + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def content(self):
+        """
+        Return the content of the buffer.
+
+        Returns:
+        - A tuple (previous_states, actions, rewards, next_states, dones).
+        """
+
+
+        return self.previous_states, self.actions, self.rewards, self.next_states, self.dones
+    
+    def empty(self):
+        self.size = 0
+        self.index = 0
+
+        # Preallocate memory for the buffer
+        self.previous_states = np.zeros((self.capacity, self.state_dim), dtype=np.float32)
+        self.actions = np.zeros((self.capacity), dtype=np.int64)
+        self.rewards = np.zeros((self.capacity), dtype=np.float32)
+        self.next_states = np.zeros((self.capacity, self.state_dim), dtype=np.float32)
+        self.dones = np.zeros((self.capacity), dtype=np.float32)
+
+
+    def __len__(self):
+        """
+        Get the current size of the buffer.
+
+        Returns:
+        - int: Number of sequences currently stored in the buffer.
+        """
+        return self.size

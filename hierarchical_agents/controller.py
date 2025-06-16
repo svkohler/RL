@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from world import Rob_world, generate_random_walls, generate_point, generate_world
 from robot import Rob_body
 
-from helper import RunningStatsState, distance_between_point
+from helper import RunningStatsState, distance_between_point, OptimizedSequenceMemoryBuffer, OptimizedSequenceBuffer
 
 from plotting import Plot_env, Plot_metric
 
@@ -93,7 +93,7 @@ class Rob_controller():
             if random.random() < epsilon:
                 return np.random.choice(action_space)  # Explore
             else:
-                state = torch.FloatTensor(torch.FloatTensor(*[[state[3] for state in state_sequence_buffer]])).unsqueeze(0).to(self.device)
+                state = torch.FloatTensor(state_sequence_buffer[3]).unsqueeze(0).to(self.device)
                 
                 output = self.policy(state)
                 # choose either the max or according to probabilities
@@ -135,7 +135,19 @@ class Rob_controller():
         pl.show_and_close(5)
     
 
-    def train_dqn(self, batch_size=64, simulations=1280, memory_length=10000, epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.999, sequence_length=1, n_walls=3, fuel=300, standardized=False, world="sinple"):
+    def train_dqn(self, 
+                  batch_size=64, 
+                  simulations=1280, 
+                  memory_length=10000, 
+                  epsilon=1.0, 
+                  epsilon_min=0.01, 
+                  epsilon_decay=0.999, 
+                  sequence_length=1,
+                  n_walls=3, 
+                  fuel=300, 
+                  standardized=False,
+                  world="sinple"
+                ):
         # set the policy in training mode
         self.policy.train()
 
@@ -150,12 +162,14 @@ class Rob_controller():
         metric_coll = []
         metric_coll_ma = []
 
-        memory_replay_buffer = deque(maxlen=memory_length)
-        state_sequence_buffer = deque(maxlen=sequence_length)
+        memory_replay_buffer = OptimizedSequenceMemoryBuffer(memory_length, sequence_length, self.input_size, self.device)
+        state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
 
         while number_of_sims <= simulations:
 
             number_of_sims += 1
+
+            state_sequence_buffer.empty()
 
             # each simulation has a specific goal, set of walls and initial starting point
             w, starting_point = generate_world(mode=world, n_walls=n_walls)
@@ -171,7 +185,6 @@ class Rob_controller():
             done = False
             episode_reward = 0
             episode_steps = 0
-            state_sequence_buffer.append([self.state, 0, 0, self.state, done])
 
             while not done:
 
@@ -181,7 +194,7 @@ class Rob_controller():
                 self.previous_state = self.state
                 self.state_stats.update(self.return_state(as_list=True))
 
-                action_taken = self.select_action(state_sequence_buffer, epsilon=epsilon)
+                action_taken = self.select_action(state_sequence_buffer.content(), epsilon=epsilon)
 
                 # execute that action
                 self.lower.do({"steer": INT_2_DIR[action_taken]})
@@ -196,9 +209,9 @@ class Rob_controller():
 
                 done = self.lower.fuel == 0 or self.lower.arrived or self.lower.crashed
 
-                state_sequence_buffer.append([self.previous_state, action_taken, reward, self.state, done])
+                state_sequence_buffer.add((self.previous_state, action_taken, reward, self.state, done))
                 if len(state_sequence_buffer) == sequence_length:
-                    memory_replay_buffer.append(list(state_sequence_buffer))
+                    memory_replay_buffer.add(state_sequence_buffer.content())
 
                 # compute loss each 5th step
                 if total_steps % 5 == 0:
@@ -325,25 +338,18 @@ class Rob_controller():
     def compute_dqn_loss(self, memory_replay, batch_size, gamma = 0.95):
         if len(memory_replay) < batch_size:
             return
-    
-        batch = random.sample(memory_replay, batch_size)
-
-        start = time.time()
-        previous_batch = torch.FloatTensor(*[[[state[0] for state in sequence] for sequence in batch]]).to(self.device)
-        action_batch = torch.LongTensor(*[[[state[1] for state in sequence] for sequence in batch]]).unsqueeze(1).to(self.device)
-        reward_batch = torch.FloatTensor(*[[[state[2] for state in sequence] for sequence in batch]]).to(self.device)
-        state_batch = torch.FloatTensor(*[[[state[3] for state in sequence] for sequence in batch]]).to(self.device)
-        done_batch = torch.FloatTensor(*[[[state[4] for state in sequence] for sequence in batch]]).to(self.device)
-        print(f"time to prepare tensors: {round(time.time()-start, 5)} seconds")
-
+        
+        previous_states, actions, rewards, next_states, dones = memory_replay.sample(batch_size)
 
         # Compute Q-values for current states
-        q_values = self.policy(previous_batch).gather(2, action_batch)[:, :, -1].squeeze()
+        q_values = self.policy(previous_states).squeeze().gather(1, actions[:, -1].unsqueeze(1))
+
 
         # Compute target Q-values using the target network
         with torch.no_grad():
-            max_next_q_values = self.target_network(state_batch).squeeze().max(1)[0]
-            target_q_values = reward_batch[:, -1].squeeze() + gamma * max_next_q_values * (1 - done_batch[:, -1].squeeze())
+            max_next_q_values = self.target_network(next_states).squeeze().max(1)[0]
+            print(max_next_q_values.size())
+            target_q_values = rewards[:, -1].squeeze() + gamma * max_next_q_values * (1 - dones[:, -1].squeeze())
 
         return nn.MSELoss()(q_values, target_q_values)
 
