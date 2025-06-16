@@ -1,0 +1,88 @@
+import matplotlib.pyplot as plt
+import time
+
+from helper import relative_delta
+
+class Plot_world():
+    def __init__(self, world):
+        """sets up the plot
+        """
+        self.world = world
+        plt.ion()
+        plt.axes().set_aspect('equal')
+        self.redraw()
+
+    def redraw(self): 
+        plt.clf()
+
+        plt.plot(self.world.goal[0], self.world.goal[1], marker="o", c="gold",  markersize=20)         
+        for wall in self.world.walls: 
+            ((x0,y0),(x1,y1)) = wall 
+            plt.plot([x0,x1],[y0,y1],"-k",linewidth=3)
+    
+    def show_and_close(self, duration=5):
+        """Shows the plot for a specified duration (in seconds) and then closes it."""
+        plt.draw()  # Ensure the plot is updated
+        plt.pause(0.001)  # Small pause to render the plot
+        time.sleep(duration)  # Wait for the specified duration
+        plt.close()  # Close the plot
+
+class Plot_env():
+    def __init__(self, world, body=None,top=None):
+        """sets up the plot
+        """
+        self.world = world
+        self.body = body
+        self.top = top
+        plt.ion()
+        plt.axes().set_aspect('equal')
+        self.redraw()
+
+    def redraw(self): 
+        plt.clf()
+
+        plt.plot(self.world.goal[0], self.world.goal[1], marker="o", c="gold",  markersize=20)        
+        plt.plot(self.body.return_state()["rob_x_pos"], self.body.return_state()["rob_y_pos"], marker="X", c="blue", markersize=20)        
+        plt.plot(self.body.route[0][0], self.body.route[0][1], marker="X", c="green", markersize=20)        
+        for wall in self.world.walls: 
+            ((x0,y0),(x1,y1)) = wall 
+            plt.plot([x0,x1],[y0,y1],"-k",linewidth=3)
+
+        if self.body.route or self.body.wall_history:
+            self.plot_run()
+
+    def plot_run(self):
+        """plots the history after the agent has finished. This is typically only used if body.plotting==False """
+        if self.body.route:
+            for pos in self.body.route:
+                plt.plot(pos[0],pos[1],"go", alpha=0.3)
+                for whisker in self.body.whisker_set.set:
+                    w = tuple(map(sum, zip((pos[0], pos[1]), (relative_delta(pos[2] + whisker.relative_dir, whisker.length)))))
+                    plt.plot([pos[0], w[0]],[pos[1], w[1]], color="grey", alpha=0.3)
+                plt.draw()
+                plt.pause(0.001)
+    
+    def show_and_close(self, duration=5):
+        """Shows the plot for a specified duration (in seconds) and then closes it."""
+        plt.draw()  # Ensure the plot is updated
+        plt.pause(0.001)  # Small pause to render the plot
+        time.sleep(duration)  # Wait for the specified duration
+        plt.close()  # Close the plot
+
+class Plot_metric():
+    def __init__(self, loss_list, y_label="", x_label="", title=""):
+        """sets up the plot
+        """
+        self.loss_list = loss_list
+        plt.ion()
+        plt.axes().set_aspect('equal')
+        self.redraw(y_label, x_label, title)
+
+    def redraw(self, y_label, x_label, title): 
+        plt.clf()
+        plt.plot(self.loss_list, linestyle="-", marker=".")
+        plt.xlabel(x_label)
+        plt.ylabel(y_label)
+        plt.title(title)
+        plt.draw()
+        plt.pause(0.001)    
