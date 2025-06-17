@@ -42,9 +42,6 @@ mid = Rob_controller(b,
                      )
 
 def inf():
-
-    mid.load_policy_stats(path=str(pathlib.Path(__file__).parent.resolve())+"/policy_stats/"+args.policy + "/" + args.world)
-
     mid.do(w, b, action={"go_to": w.goal}, sequence_length=args.sequence_length, standardized=args.standardized)
 
 def train_policy():

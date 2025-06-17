@@ -241,10 +241,10 @@ class Rob_controller():
             performance_metric_coll.append(episode_reward / episode_steps)
             computation_metric_coll.append(time.time()-start_time_episode)
 
-            if number_of_sims > 100:
+            if number_of_sims > 1:
                 performance_metric_coll_ma.append((sum(performance_metric_coll[-1000:])) / min(len(performance_metric_coll), 1000))
                 computation_metric_coll_ma.append((sum(computation_metric_coll[-1000:])) / min(len(computation_metric_coll), 1000))
-                pmetric.redraw([performance_metric_coll_ma, computation_metric_coll_ma], y_labels=["step reward", "time per episode"], x_labels=["episodes", "episodes"], titles=["avg. reward per step", "avg. time per episode"])
+                pmetric.redraw([performance_metric_coll_ma, computation_metric_coll_ma])
 
             if number_of_sims % 250 == 0:      
                 pl = Plot_env(w, self.lower)
