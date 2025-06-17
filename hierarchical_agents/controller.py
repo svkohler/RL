@@ -149,8 +149,8 @@ class Rob_controller():
             n_walls=3, 
             fuel=300, 
             standardized=False,
-            world="sinple"
-                ):
+            world="simple"
+        ):
         # set the policy in training mode
         self.policy.train()
 
@@ -164,6 +164,7 @@ class Rob_controller():
         total_steps = 0
         performance_metric_coll, performance_metric_coll_ma = [], []
         computation_metric_coll, computation_metric_coll_ma = [], []
+        pmetric = Plot_metric([performance_metric_coll_ma, computation_metric_coll_ma], y_labels=["step reward", "time per episode"], x_labels=["episodes", "episodes"], titles=["avg. reward per step", "avg. time per episode"])
 
         memory_replay_buffer = OptimizedSequenceMemoryBuffer(memory_length, sequence_length, self.input_size, self.device)
         state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
@@ -240,10 +241,10 @@ class Rob_controller():
             performance_metric_coll.append(episode_reward / episode_steps)
             computation_metric_coll.append(time.time()-start_time_episode)
 
-            if number_of_sims > 1:
+            if number_of_sims > 100:
                 performance_metric_coll_ma.append((sum(performance_metric_coll[-1000:])) / min(len(performance_metric_coll), 1000))
-                computation_metric_coll.append((sum(computation_metric_coll[-1000:])) / min(len(computation_metric_coll), 1000))
-                pmetric = Plot_metric([performance_metric_coll_ma, computation_metric_coll], y_labels=["step reward", "time per episode"], x_labels=["episodes", "episodes"], titles=["avg. reward per step", "avg. time per episode"])
+                computation_metric_coll_ma.append((sum(computation_metric_coll[-1000:])) / min(len(computation_metric_coll), 1000))
+                pmetric.redraw([performance_metric_coll_ma, computation_metric_coll_ma], y_labels=["step reward", "time per episode"], x_labels=["episodes", "episodes"], titles=["avg. reward per step", "avg. time per episode"])
 
             if number_of_sims % 250 == 0:      
                 pl = Plot_env(w, self.lower)

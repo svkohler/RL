@@ -78,17 +78,18 @@ class Plot_metric():
         self.x_labels = x_labels
         self.y_labels = y_labels
         self.titles = titles
+        _, self.axs = plt.subplots(nrows=int(np.ceil(len(self.loss_lists)/2)), ncols=2, figsize=(8, 4))
         plt.ion()
-        plt.axes().set_aspect('equal')
-        self.redraw()
+        # plt.axes().set_aspect('equal')
+        self.redraw(loss_lists, y_labels, x_labels, titles)
 
-    def redraw(self): 
-        plt.clf()
-        fig, axs = plt.subplots(nrows=int(np.ceil(len(self.loss_lists)/2)), ncols=2, figsize=(8, 4))
-        for i in range(len(self.loss_lists)):
-            axs[i].plot(self.loss_lists[i], linestyle="-", marker=".")
-            axs[i].set_xlabel(self.x_labels[i])
-            axs[i].set_ylabel(self.y_labels[i])
-            axs[i].set_title(self.titles[i])
-        plt.draw()
-        plt.pause(0.001)
+    def redraw(self, loss_lists, y_labels=[""], x_labels=[""], titles=[""]): 
+        # plt.clf()
+        for i in range(len(loss_lists)):
+            self.axs[i].clear()
+            self.axs[i].plot(loss_lists[i], linestyle="-", marker=".")
+            self.axs[i].set_xlabel(x_labels[i])
+            self.axs[i].set_ylabel(y_labels[i])
+            self.axs[i].set_title(titles[i])
+        # plt.draw()
+        plt.pause(.0000001)
