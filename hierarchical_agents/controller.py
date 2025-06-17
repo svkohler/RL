@@ -113,13 +113,13 @@ class Rob_controller():
         self.state = self.return_state(as_list=True, standardized=standardized)
 
         done = False
-        state_sequence_buffer = deque(maxlen=sequence_length)
+        state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
 
         while not done: 
 
-            state_sequence_buffer.append([None, None, None, self.state, None])
+            state_sequence_buffer.add((None, 0, None, self.state, None))
 
-            action_taken = self.select_action(state_sequence_buffer, epsilon=0)
+            action_taken = self.select_action(state_sequence_buffer.content(), epsilon=0)
 
             # execute that action
             self.lower.do({"steer": INT_2_DIR[action_taken]})
@@ -137,19 +137,20 @@ class Rob_controller():
         pl.show_and_close(5)
         
 
-    def train_dqn(self, 
-                batch_size=64, 
-                simulations=1280, 
-                memory_length=10000, 
-                epsilon=1.0, 
-                epsilon_min=0.01, 
-                epsilon_decay=0.999, 
-                sequence_length=1,
-                n_walls=3, 
-                fuel=300, 
-                standardized=False,
-                world="sinple"
-                ):
+    def train_dqn(
+            self, 
+            batch_size=64, 
+            simulations=1280, 
+            memory_length=10000, 
+            epsilon=1.0, 
+            epsilon_min=0.01, 
+            epsilon_decay=0.999, 
+            sequence_length=1,
+            n_walls=3, 
+            fuel=300, 
+            standardized=False,
+            world="simple"
+        ):
         # set the policy in training mode
         self.policy.train()
 
@@ -161,13 +162,15 @@ class Rob_controller():
         # init variables to keep track of metrics/simulations
         number_of_sims = 0
         total_steps = 0
-        metric_coll = []
-        metric_coll_ma = []
+        performance_metric_coll, performance_metric_coll_ma = [], []
+        computation_metric_coll, computation_metric_coll_ma = [], []
+        pmetric = Plot_metric([performance_metric_coll_ma, computation_metric_coll_ma], y_labels=["step reward", "time per episode"], x_labels=["episodes", "episodes"], titles=["avg. reward per step", "avg. time per episode"])
 
         memory_replay_buffer = OptimizedSequenceMemoryBuffer(memory_length, sequence_length, self.input_size, self.device)
         state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
 
         while number_of_sims <= simulations:
+            start_time_episode = time.time()
 
             number_of_sims += 1
 
@@ -217,10 +220,9 @@ class Rob_controller():
                 if len(state_sequence_buffer) == sequence_length:
                     memory_replay_buffer.add(state_sequence_buffer.content())
 
-                # compute loss each 5th step
+                # compute loss each x'th step
                 if total_steps % 5 == 0:
                     loss = self.compute_dqn_loss(memory_replay_buffer, batch_size)
-
                     if loss is not None:
                         self.optimizer.zero_grad()
                         loss.backward()
@@ -234,21 +236,20 @@ class Rob_controller():
 
             self.lower.check_status(id=number_of_sims, reward=episode_reward)
 
-            metric_coll.append(episode_reward / episode_steps)
+            # append metrics for realtime tracking
+            performance_metric_coll.append(episode_reward / episode_steps)
+            computation_metric_coll.append(time.time()-start_time_episode)
 
-            if number_of_sims > 100:
-                start_time = time.time()
-                metric_coll_ma.append((sum(metric_coll[-1000:])) / min(len(metric_coll), 1000))
-                pmetric = Plot_metric(metric_coll_ma, y_label="step reward", x_label="episodes", title="avg. reward per step")
+            if number_of_sims > 1:
+                performance_metric_coll_ma.append((sum(performance_metric_coll[-1000:])) / min(len(performance_metric_coll), 1000))
+                computation_metric_coll_ma.append((sum(computation_metric_coll[-1000:])) / min(len(computation_metric_coll), 1000))
+                pmetric.redraw([performance_metric_coll_ma, computation_metric_coll_ma])
 
             if number_of_sims % 250 == 0:      
-                start_time = time.time()
                 pl = Plot_env(w, self.lower)
-                self.save_policy_stats(self.path_to_weights + "tmp/")
+                self.save_policy_stats(self.path_to_weights + "/tmp/")
                 print(f"Current learning rate: {self.lr_scheduler.get_last_lr()}.")
                 print(f"Current epsilon: {epsilon}.")
-
-
 
 
     def train_reinforce(self, batch_size=64, simulations=1280, max_length=2000):

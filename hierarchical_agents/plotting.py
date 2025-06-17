@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import time
+import numpy as np
 
 from helper import relative_delta
 
@@ -70,19 +71,24 @@ class Plot_env():
         plt.close()  # Close the plot
 
 class Plot_metric():
-    def __init__(self, loss_list, y_label="", x_label="", title=""):
+    def __init__(self, loss_lists, y_labels=[""], x_labels=[""], titles=[""]):
         """sets up the plot
         """
-        self.loss_list = loss_list
+        self.loss_lists = loss_lists
+        self.x_labels = x_labels
+        self.y_labels = y_labels
+        self.titles = titles
+        _, self.axs = plt.subplots(nrows=int(np.ceil(len(self.loss_lists)/2)), ncols=2, figsize=(8, 4))
         plt.ion()
-        plt.axes().set_aspect('equal')
-        self.redraw(y_label, x_label, title)
+        # plt.axes().set_aspect('equal')
+        self.redraw(loss_lists)
 
-    def redraw(self, y_label, x_label, title): 
-        plt.clf()
-        plt.plot(self.loss_list, linestyle="-", marker=".")
-        plt.xlabel(x_label)
-        plt.ylabel(y_label)
-        plt.title(title)
-        plt.draw()
-        plt.pause(0.001)    
+    def redraw(self, loss_lists): 
+        # plt.clf()
+        for i in range(len(loss_lists)):
+            self.axs[i].clear()
+            self.axs[i].plot(loss_lists[i], linestyle="-", marker=".")
+            self.axs[i].set_xlabel(self.x_labels[i])
+            self.axs[i].set_ylabel(self.y_labels[i])
+            self.axs[i].set_title(self.titles[i])
+        plt.pause(.0000001)
