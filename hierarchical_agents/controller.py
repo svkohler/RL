@@ -113,13 +113,13 @@ class Rob_controller():
         self.state = self.return_state(as_list=True, standardized=standardized)
 
         done = False
-        state_sequence_buffer = deque(maxlen=sequence_length)
+        state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
 
         while not done: 
 
-            state_sequence_buffer.append([None, None, None, self.state, None])
+            state_sequence_buffer.add((None, 0, None, self.state, None))
 
-            action_taken = self.select_action(state_sequence_buffer, epsilon=0)
+            action_taken = self.select_action(state_sequence_buffer.content(), epsilon=0)
 
             # execute that action
             self.lower.do({"steer": INT_2_DIR[action_taken]})
@@ -248,11 +248,9 @@ class Rob_controller():
 
             if number_of_sims % 250 == 0:      
                 pl = Plot_env(w, self.lower)
-                self.save_policy_stats(self.path_to_weights + "tmp/")
+                self.save_policy_stats(self.path_to_weights + "/tmp/")
                 print(f"Current learning rate: {self.lr_scheduler.get_last_lr()}.")
                 print(f"Current epsilon: {epsilon}.")
-
-
 
 
     def train_reinforce(self, batch_size=64, simulations=1280, max_length=2000):
