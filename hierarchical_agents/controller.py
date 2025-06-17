@@ -218,18 +218,13 @@ class Rob_controller():
                     memory_replay_buffer.add(state_sequence_buffer.content())
 
                 # compute loss each 5th step
-                if total_steps % 2 == 0:
-                    torch.cuda.synchronize()
-                    start_time = time.time()
+                if total_steps % 5 == 0:
                     loss = self.compute_dqn_loss(memory_replay_buffer, batch_size)
 
                     if loss is not None:
                         self.optimizer.zero_grad()
                         loss.backward()
                         self.optimizer.step()
-                    torch.cuda.synchronize()
-                    print(f"time for loss and backprob: {round(time.time()- start_time, 5)}")
-
 
                 # update target network after 10k steps
                 if total_steps % 10000 == 0:
