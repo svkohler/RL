@@ -184,3 +184,83 @@ class ReinforceLSTMPolicyNetwork(nn.Module):
         logits = self.fc(lstm_out)  # Fully connected layer
         action_probs = self.softmax(logits)  # Convert to probabilities
         return action_probs
+    
+
+class ActorTransformerPolicyNetwork(nn.Module):
+    def __init__(self, **kwargs):
+        super(ActorTransformerPolicyNetwork, self).__init__()
+
+        self.embedding = nn.Linear(kwargs["state_dim"], kwargs["d_model_transformer"])
+
+        self.positional_encoding = PositionalEncoding(kwargs["d_model_transformer"], kwargs["device"])
+
+        encoder_layer = nn.TransformerEncoderLayer(d_model=kwargs["d_model_transformer"], nhead=kwargs["nhead_transformer"], dim_feedforward=kwargs["dim_feedforward_transformer"], batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=kwargs["n_encoding_layers_transformer"])
+
+        # Output layer to predict q-values
+        self.fc_out = nn.Linear(kwargs["d_model_transformer"], kwargs["action_dim"])
+
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        """
+        x: [batch_size, seq_len, state_dim]
+        """
+        # Embed the input states
+        x = self.embedding(x) 
+
+        # Add positional encodings
+        x = self.positional_encoding(x)
+
+        # Pass through the transformer encoder
+        x = self.transformer_encoder(x)
+
+        # Take the embedding corresponding to the last state in the sequence
+        x = x[:, -1, :]
+
+        # Output Q-values
+        logits = self.fc_out(x).unsqueeze(1)
+
+        probs = self.softmax(logits)
+
+        return probs
+
+    def reset(self):
+        pass
+
+class CriticTransformerPolicyNetwork(nn.Module):
+    def __init__(self, **kwargs):
+        super(CriticTransformerPolicyNetwork, self).__init__()
+
+        self.embedding = nn.Linear(kwargs["state_dim"], kwargs["d_model_transformer"])
+
+        self.positional_encoding = PositionalEncoding(kwargs["d_model_transformer"], kwargs["device"])
+
+        encoder_layer = nn.TransformerEncoderLayer(d_model=kwargs["d_model_transformer"], nhead=kwargs["nhead_transformer"], dim_feedforward=kwargs["dim_feedforward_transformer"], batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=kwargs["n_encoding_layers_transformer"])
+
+        # Output layer to predict q-values
+        self.fc_out = nn.Linear(kwargs["d_model_transformer"], kwargs["action_dim"])
+
+    def forward(self, x):
+        """
+        x: [batch_size, seq_len, state_dim]
+        """
+        # Embed the input states
+        x = self.embedding(x) 
+
+        # Add positional encodings
+        x = self.positional_encoding(x)
+
+        # Pass through the transformer encoder
+        x = self.transformer_encoder(x)
+
+        # Take the embedding corresponding to the last state in the sequence
+        x = x[:, -1, :]
+
+        # Output Q-values
+        value = self.fc_out(x).unsqueeze(1)
+        return value
+
+    def reset(self):
+        pass

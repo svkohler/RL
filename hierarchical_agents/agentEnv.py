@@ -46,7 +46,7 @@ def inf():
 
 def train_policy():
 
-    mid.train_dqn(
+    mid.train_actor_critic(
         batch_size=args.batch_size, 
         simulations=args.simulations, 
         memory_length=args.mem_length, 
