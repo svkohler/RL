@@ -34,7 +34,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 w, starting_point = generate_world(mode="simple", n_walls=args.n_walls)
 b = Rob_body(w, init_pos=starting_point, fuel_tank=args.fuel)
 mid = Rob_controller(b, 
-                     policy=get_policy(args.policy), 
+                     networks=get_networks(args.policy, device), 
                      pretrained=args.pretrained, 
                      path_to_weights=str(pathlib.Path(__file__).parent.resolve())+"/policy_stats/"+args.policy + "/" + args.world, 
                      lr =args.learning_rate, 

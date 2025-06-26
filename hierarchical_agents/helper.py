@@ -3,6 +3,9 @@ from typing import Tuple
 import torch
 import numpy as np
 import random
+import time
+
+from plotting import Plot_metric
 
 
 def is_intersection(linea: Tuple[Tuple[float, float]], lineb: Tuple[Tuple[float, float]], get_point=False):
@@ -257,3 +260,78 @@ class OptimizedSequenceBuffer:
         - int: Number of sequences currently stored in the buffer.
         """
         return self.size
+
+class TimerDecorator:
+    def __init__(self, func):
+        self.func = func
+        self.execution_time = None # Store the time taken for the function
+
+    def __call__(self, *args, **kwargs):
+        start_time = time.perf_counter()
+        result = self.func(*args, **kwargs)
+        end_time = time.perf_counter()
+        self.execution_time = end_time - start_time
+        return result
+
+    def get_execution_time(self):
+        return self.execution_time
+
+class TrainMonitor():
+    """
+    class to monitor training progress
+    """
+    def __init__(self):
+        self.num_episodes = 0
+        self.total_steps = 0
+        self.performance_metric_coll, self.performance_metric_coll_ma = [], []
+        self.computation_metric_coll, self.computation_metric_coll_ma = [], []
+        self.pmetric = Plot_metric(
+            [self.performance_metric_coll_ma, self.computation_metric_coll_ma], 
+            y_labels=["step reward", "time per episode"], 
+            x_labels=["episodes", "episodes"], 
+            titles=["avg. reward per step", "avg. time per episode"]
+        )
+
+        self.grace_period = 100
+        self.ma_window = 1000
+
+    def update(self, episode_reward, episode_steps, comp_time):
+        self.num_episodes += 1
+        self.total_steps += episode_steps
+
+        self.performance_metric_coll.append(episode_reward / episode_steps)
+        self.computation_metric_coll.append(comp_time)
+
+        if self.num_episodes > self.grace_period:
+            self.performance_metric_coll_ma.append(
+                    (sum(self.performance_metric_coll[-self.ma_window:])) / min(len(self.performance_metric_coll), self.ma_window)
+                )
+            self.computation_metric_coll_ma.append(
+                    (sum(self.computation_metric_coll[-self.ma_window:])) / min(len(self.computation_metric_coll), self.ma_window)
+                )
+
+
+def optimzer_wrapper(optimizer, loss):
+    """
+    wrap lines into a function such that they dont have to be repeated multiple times
+    """
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+def update_target_network(target, source, mode=["hard", "soft"], tau=0.005):
+    """
+    function updates target with parameters from a source network
+    return: None
+    """
+    if mode=="hard":
+        target.load_state_dict(source.state_dict())
+    elif mode == "soft":
+        target_state_dict = target.state_dict()
+        source_state_dict = source.state_dict()
+        for key in source_state_dict:
+            target_state_dict[key] = source_state_dict[key]*tau + target_state_dict[key]*(1-tau)
+
+
+
+            

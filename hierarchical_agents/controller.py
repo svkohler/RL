@@ -14,35 +14,40 @@ from policy_networks import ActorTransformerPolicyNetwork, CriticTransformerPoli
 from world import Rob_world, generate_random_walls, generate_point, generate_world
 from robot import Rob_body
 
-from helper import RunningStatsState, distance_between_point, OptimizedSequenceMemoryBuffer, OptimizedSequenceBuffer
+from helper import RunningStatsState, TimerDecorator, TrainMonitor, distance_between_point, OptimizedSequenceMemoryBuffer, OptimizedSequenceBuffer, monitor, optimzer_wrapper, status_check, update_target_network
 
 from plotting import Plot_env, Plot_metric
 
 from constants import INT_2_DIR, MODEL_DIMENSIONS
 
+GAMMA = 0.95
+EPSILON_MIN = 0.01
+EPSILON_DECAY = 0.999
+ACTION_SPACE = [0,1,2,3]
+TARGET_ENTROPY = -1
+
 class Rob_controller(): 
     
-    def __init__(self, lower, policy, pretrained=True, path_to_weights=None, lr=1e-5, device="cpu"):
+    def __init__(self, lower, networks, pretrained=True, path_to_weights=None, lr=1e-5, device="cpu"):
        """The lower-level for the middle layer is the body.
        """
        self.device = device
        self.path_to_weights = path_to_weights
        self.lower = lower
+       self.close_threshold = 2 # distance that is close enough to arrived
+
        self.state = None
        self.previous_state = None
        self.current_goal = None
        self.input_size = 6+len(self.lower.whisker_set.set)
 
-       self.policy = policy.to(device)
+       self.networks, self.optimizers = networks
+
        self.state_stats = RunningStatsState(self.input_size)
 
        if pretrained:
            self.load_policy_stats(path_to_weights)
 
-       self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
-       self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, "max", 0.5, 1000, cooldown=500, eps=1e-10)
-
-       self.close_threshold = 2 # distance that is close enough to arrived
 
     def return_state(self, as_list=False, standardized=False): 
         state = {
@@ -88,15 +93,15 @@ class Rob_controller():
         return reward
     
     # Function to choose action using epsilon-greedy policy
-    def select_action(self, state_sequence_buffer, action_space=[0,1,2,3], epsilon=0.0, mode="max"):
+    def select_action(self, epsilon=0.0, mode="max"):
         # with torch.no_grad():
         # random choice (when you want to skip random choice, then choose epsilon == 0.0 (default))
         if random.random() < epsilon:
-            return np.random.choice(action_space)  # Explore
+            return np.random.choice(ACTION_SPACE)  # Explore
         else:
-            state = torch.FloatTensor(state_sequence_buffer[3]).unsqueeze(0).to(self.device)
+            state = torch.FloatTensor(self.state_sequence_buffer[3]).unsqueeze(0).to(self.device)
             
-            output = self.policy(state)
+            output = self.networks["actor"](state)
 
             # choose either the max or according to probabilities
             if mode == "max":
@@ -104,10 +109,13 @@ class Rob_controller():
             if mode == "probs":
                 probabilities = np.array(output.detach().flatten())
                 assert np.sum(probabilities) == 1.0, "Sum of probabilites has to be 1!"
-                return np.random.choice(action_space, p=probabilities)
+                return np.random.choice(ACTION_SPACE, p=probabilities)
 
 
     def do(self, world, body, action, sequence_length, standardized):
+        """
+        the controller goes to a specified goal during inference
+        """
 
         self.current_goal = action["go_to"]
 
@@ -136,122 +144,136 @@ class Rob_controller():
         pl = Plot_env(world, body)
 
         pl.show_and_close(5)
-        
 
+    def step(self, state_sequence_buffer, epsilon=0.0):
+        """
+        the controller executes a single step with the robot
+        returns a tuple (previous_state, action, reward, next_state, done)
+        """
+
+        self.previous_state = self.state
+
+        self.state_stats.update(self.return_state(as_list=True))
+
+        action_taken = self.select_action(state_sequence_buffer, epsilon)
+
+        self.lower.do({"steer": INT_2_DIR[action_taken]})
+
+        self.state = self.return_state(as_list=True)
+
+        reward = self.reward()
+
+        self.check_arrived()
+
+        done = self.lower.fuel == 0 or self.lower.arrived or self.lower.crashed
+
+        return self.previous_state, action_taken, reward, self.state, done
+
+    @TimerDecorator
+    def episode(
+            self, 
+            world="simple", 
+            n_walls = 3, 
+            fuel=300, 
+            sequence_length=1,
+            epsilon=1.0,
+            state_sequence_buffer=None, 
+            memory_replay_buffer=None,
+            loss_and_update_function=None,
+            update_target_network_function=None,
+            ):
+        """
+        the controller executes a whole episode with the robot during training
+        """
+
+        # generate world for episode
+        w, r = generate_world(mode=world, n_walls=n_walls, fuel=fuel)
+        self.current_goal = w.goal
+
+        # init state
+        self.state = self.return_state(as_list=True)
+
+        # empty sequence buffer (no sequences over episode boundaries)
+        self.state_sequence_buffer.empty()
+
+        # initialize run vars
+        done = False
+        episode_reward = 0
+        episode_steps = 0
+
+        while not done:
+            ps, a, r, ns, d = self.step()
+            done = d
+            episode_reward += r
+            episode_steps += 1
+
+            # fill sequence and memory buffer
+            self.state_sequence_buffer.add((ps, a, r, ns, d))
+            if len(state_sequence_buffer) == sequence_length:
+                memory_replay_buffer.add(self.state_sequence_buffer.content())
+            
+            rand = random.random()
+            if rand < 0.2:
+                loss_and_update_function()
+                if rand < 0.0001:
+                    update_target_network_function()
+        
+        if rand < 0.004:
+            pl = Plot_env(w, self.lower)
+
+        return episode_reward, episode_steps
+        
     def train_dqn(
             self, 
             batch_size=64, 
-            simulations=1280, 
+            episodes=1280, 
             memory_length=10000, 
             epsilon=1.0, 
-            epsilon_min=0.01, 
-            epsilon_decay=0.999, 
             sequence_length=1,
             n_walls=3, 
-            fuel=300, 
-            standardized=False,
             world="simple"
         ):
-        # set the policy in training mode
-        self.policy.train()
 
-        # initialize the target network and load weights from policy network
-        self.target_network = copy.deepcopy(self.policy).to(self.device)
-        self.target_network.load_state_dict(self.policy.state_dict())
-        self.target_network.eval()
+        def compute_loss_and_update():
+            if len(self.memory_replay_buffer) < batch_size:
+                return
+            previous_states, actions, rewards, next_states, dones = self.memory_replay_buffer.sample(batch_size)
+
+            # Compute Q-values for current states
+            q_values = self.networks["actor"](previous_states).squeeze().gather(1, actions[:, -1].unsqueeze(1))
+
+            # Compute target Q-values using the target network
+            with torch.no_grad():
+                max_next_q_values = self.networks["target"](next_states).squeeze().max(1)[0]
+                target_q_values = rewards[:, -1].squeeze() + GAMMA * max_next_q_values * (1 - dones[:, -1].squeeze())
+
+            loss = nn.MSELoss()(q_values.squeeze(), target_q_values)
+
+            self.optimizers["actor"].zero_grad()
+            loss.backward()
+            self.optimizers["actor"].step()
+
+        def update_target_networks():
+            self.networks["target"].load_state_dict(self.networks["actor"].state_dict())
+            self.epsilon = max(EPSILON_MIN, (self.epsilon * EPSILON_DECAY))
         
-        # init variables to keep track of metrics/simulations
-        number_of_sims = 0
-        total_steps = 0
-        performance_metric_coll, performance_metric_coll_ma = [], []
-        computation_metric_coll, computation_metric_coll_ma = [], []
-        pmetric = Plot_metric([performance_metric_coll_ma, computation_metric_coll_ma], y_labels=["step reward", "time per episode"], x_labels=["episodes", "episodes"], titles=["avg. reward per step", "avg. time per episode"])
+        # set the exploitation-exploration parameter
+        self.epsilon = epsilon
 
-        memory_replay_buffer = OptimizedSequenceMemoryBuffer(memory_length, sequence_length, self.input_size, self.device)
-        state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
+        # set the policy in training mode
+        self.networks["actor"].train()
+        self.networks["target"].eval()
+        
+        self.memory_replay_buffer = OptimizedSequenceMemoryBuffer(memory_length, sequence_length, self.input_size, self.device)
+        self.state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
+        train_monitor = TrainMonitor()
 
-        while number_of_sims <= simulations:
-            start_time_episode = time.time()
+        while train_monitor.num_episodes <= episodes:
+            e_r, e_s = self.episode(world, n_walls, self.state_sequence_buffer, self.memory_replay_buffer, compute_loss_and_update, update_target_networks)
+            train_monitor.update(e_r, e_s, self.episode.get_execution_time())
+            self.lower.check_status(id=train_monitor.num_episodes, reward=e_r)                
 
-            number_of_sims += 1
-
-            state_sequence_buffer.empty()
-
-            # each simulation has a specific goal, set of walls and initial starting point
-            w, starting_point = generate_world(mode=world, n_walls=n_walls)
-            self.current_goal = w.goal
-
-            self.lower = Rob_body(w, init_pos=starting_point, fuel_tank=fuel)
-
-            self.state = self.return_state(as_list=True, standardized=standardized)
-
-            self.policy.reset()
-
-            # initialize run vars
-            done = False
-            episode_reward = 0
-            episode_steps = 0
-
-            while not done:
-
-                total_steps += 1
-                episode_steps += 1
-
-                self.previous_state = self.state
-
-                self.state_stats.update(self.return_state(as_list=True))
-
-                action_taken = self.select_action(state_sequence_buffer.content(), epsilon=epsilon)
-
-                # execute that action
-                self.lower.do({"steer": INT_2_DIR[action_taken]})
-
-                self.state = self.return_state(as_list=True, standardized=standardized)
-
-                reward = self.reward()
-
-                episode_reward += reward
-
-                self.check_arrived()
-
-                done = self.lower.fuel == 0 or self.lower.arrived or self.lower.crashed
-
-                state_sequence_buffer.add((self.previous_state, action_taken, reward, self.state, done))
-
-                if len(state_sequence_buffer) == sequence_length:
-                    memory_replay_buffer.add(state_sequence_buffer.content())
-
-                # compute loss each x'th step
-                if total_steps % 5 == 0:
-                    loss = self.compute_dqn_loss(memory_replay_buffer, batch_size)
-                    if loss is not None:
-                        self.optimizer.zero_grad()
-                        loss.backward()
-                        self.optimizer.step()
-
-
-                # update target network after 10k steps
-                if total_steps % 10000 == 0:
-                    self.target_network.load_state_dict(self.policy.state_dict())
-                    epsilon = max(epsilon_min, (epsilon * epsilon_decay))
-
-
-            self.lower.check_status(id=number_of_sims, reward=episode_reward)
-
-            # append metrics for realtime tracking
-            performance_metric_coll.append(episode_reward / episode_steps)
-            computation_metric_coll.append(time.time()-start_time_episode)
-
-            if number_of_sims > 1:
-                performance_metric_coll_ma.append((sum(performance_metric_coll[-1000:])) / min(len(performance_metric_coll), 1000))
-                computation_metric_coll_ma.append((sum(computation_metric_coll[-1000:])) / min(len(computation_metric_coll), 1000))
-                pmetric.redraw([performance_metric_coll_ma, computation_metric_coll_ma])
-
-            if number_of_sims % 250 == 0:      
-                pl = Plot_env(w, self.lower)
-                self.save_policy_stats(self.path_to_weights + "/tmp/")
-                print(f"Current learning rate: {self.lr_scheduler.get_last_lr()}.")
-                print(f"Current epsilon: {epsilon}.")
+            self.save_policy_stats(self.path_to_weights + "/tmp/")
 
 
     def train_reinforce(self, batch_size=64, simulations=1280, max_length=2000):
@@ -347,198 +369,78 @@ class Rob_controller():
             print(f"current leanring rate: {self.lr_scheduler.get_last_lr()}.")
                     
     def train_actor_critic(
-                        self, 
+            self, 
             batch_size=64, 
-            simulations=1280, 
+            episodes=1280, 
             memory_length=10000, 
-            epsilon=1.0, 
-            epsilon_min=0.01, 
-            epsilon_decay=0.999, 
             sequence_length=1,
             n_walls=3, 
-            fuel=300, 
-            standardized=False,
             world="simple"
     ):
+        def compute_loss_and_update():
+            if len(self.memory_replay_buffer) < batch_size:
+                return
+            previous_states, actions, rewards, next_states, dones = self.memory_replay_buffer.sample(batch_size)
 
-        self.actor = ActorTransformerPolicyNetwork(**MODEL_DIMENSIONS)
-        self.critic1 = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS)
-        self.critic2 = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS)
-        self.target_critic1 = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS)
-        self.target_critic2 = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS)
+            # Update critic
+            with torch.no_grad():
+                next_probabilities = self.actor(next_states)
+                next_action_values1 = self.networks["target1"](next_states)
+                next_action_values2 = self.networks["target2"](next_states)
+                next_action_values = torch.min(next_action_values1, next_action_values2)
+                next_state_values = (next_probabilities * (next_action_values - 0.95 * torch.log(next_probabilities + 1e-6))).sum(dim=-1)
+                target_q_values = rewards + GAMMA * (1 - dones) * next_state_values
 
+            current_q1 = self.networks["critic1"](previous_states).squeeze(1).gather(1, actions).squeeze(-1)
+            current_q2 = self.networks["critic2"](previous_states).squeeze(1).gather(1, actions).squeeze(-1)
+            critic1_loss = nn.MSELoss()(current_q1, target_q_values)
+            critic2_loss = nn.MSELoss()(current_q2, target_q_values)
 
-        # Copy weights to target networks
-        self.target_critic1.load_state_dict(self.critic1.state_dict())
-        self.target_critic2.load_state_dict(self.critic2.state_dict())
+            optimzer_wrapper(self.optimizers["critic1"], critic1_loss)
+            optimzer_wrapper(self.optimizers["critic2"], critic2_loss)
 
-        # Optimizers
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0005)
-        self.critic1_optimizer = torch.optim.Adam(self.critic1.parameters(), lr=0.0005)
-        self.critic2_optimizer = torch.optim.Adam(self.critic2.parameters(), lr=0.0005)
-        self.log_alpha = torch.tensor(np.log(0.2), requires_grad=True)
-        self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=0.0005)
+            # Update Actor
+            probs = self.actor(previous_states)
+            q1 = self.networks["critic1"](previous_states)
+            q2 = self.networks["critic2"](previous_states)
+            min_q = torch.min(q1, q2)
+            actor_loss = (probs * (0.2 * torch.log(probs + 1e-6) - min_q)).sum(dim=-1).mean()
 
-        # init variables to keep track of metrics/simulations
-        number_of_sims = 0
-        total_steps = 0
-        performance_metric_coll, performance_metric_coll_ma = [], []
-        computation_metric_coll, computation_metric_coll_ma = [], []
-        pmetric = Plot_metric([performance_metric_coll_ma, computation_metric_coll_ma], y_labels=["step reward", "time per episode"], x_labels=["episodes", "episodes"], titles=["avg. reward per step", "avg. time per episode"])
+            optimzer_wrapper(self.optimizers["actor"], actor_loss)
 
+            # Update Alpha
+            entropy = -torch.sum(probs * torch.log(probs + 1e-6), dim=-1).mean()
+            alpha_loss = -(self.networks["log_alpha"] * (entropy + TARGET_ENTROPY).detach()).mean()
 
-        memory_replay_buffer = OptimizedSequenceMemoryBuffer(memory_length, sequence_length, self.input_size, self.device)
-        state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
+            optimzer_wrapper(self.optimizers["log_alpha"], alpha_loss)
 
-
-        while number_of_sims <= simulations:
-            start_time_episode = time.time()
-
-            number_of_sims += 1
-
-            state_sequence_buffer.empty()
-
-            # each simulation has a specific goal, set of walls and initial starting point
-            w, starting_point = generate_world(mode=world, n_walls=n_walls)
-            self.current_goal = w.goal
-
-            self.lower = Rob_body(w, init_pos=starting_point, fuel_tank=fuel)
-
-            self.state = self.return_state(as_list=True, standardized=standardized)
-
-            self.policy.reset()
-
-            # initialize run vars
-            done = False
-            episode_reward = 0
-            episode_steps = 0
-
-            while not done:
-
-                total_steps += 1
-                episode_steps += 1
-
-                self.previous_state = self.state
-
-                self.state_stats.update(self.return_state(as_list=True))
-
-                action_taken = self.select_action(state_sequence_buffer.content(), epsilon=epsilon, mode="probs")
-
-                # execute that action
-                self.lower.do({"steer": INT_2_DIR[action_taken]})
-
-                self.state = self.return_state(as_list=True, standardized=standardized)
-
-                reward = self.reward()
-
-                episode_reward += reward
-
-                self.check_arrived()
-
-                done = self.lower.fuel == 0 or self.lower.arrived or self.lower.crashed
-
-                state_sequence_buffer.add((self.previous_state, action_taken, reward, self.state, done))
-
-                if len(state_sequence_buffer) == sequence_length:
-                    memory_replay_buffer.add(state_sequence_buffer.content())
-
-                # compute loss each x'th step
-                if total_steps % 5 == 0:
-                    loss = self.compute_sac_loss(memory_replay_buffer, batch_size)
+            self.alpha = self.networks["log_alpha"].exp()
 
 
-                # update target network after 10k steps
-                if total_steps % 10000 == 0:
-                    self.target_network.load_state_dict(self.policy.state_dict())
-                    epsilon = max(epsilon_min, (epsilon * epsilon_decay))
+        def update_target_networks():
+            for target_source in [("target1", "critic1"), ("target2", "critic2")]:
+                update_target_network(target_source[0], target_source[1])
 
+        self.alpha = self.networks["log_alpha"].exp()
 
-            self.lower.check_status(id=number_of_sims, reward=episode_reward)
+        # set the policy in training mode
+        self.networks["actor"].train()
+        self.networks["critic1"].train()
+        self.networks["critic2"].train()
+        self.networks["target1"].eval()
+        self.networks["target2"].eval()
 
-            # append metrics for realtime tracking
-            performance_metric_coll.append(episode_reward / episode_steps)
-            computation_metric_coll.append(time.time()-start_time_episode)
+        self.memory_replay_buffer = OptimizedSequenceMemoryBuffer(memory_length, sequence_length, self.input_size, self.device)
+        self.state_sequence_buffer = OptimizedSequenceBuffer(sequence_length, self.input_size)
+        train_monitor = TrainMonitor()
 
-            if number_of_sims > 1:
-                performance_metric_coll_ma.append((sum(performance_metric_coll[-1000:])) / min(len(performance_metric_coll), 1000))
-                computation_metric_coll_ma.append((sum(computation_metric_coll[-1000:])) / min(len(computation_metric_coll), 1000))
-                pmetric.redraw([performance_metric_coll_ma, computation_metric_coll_ma])
+        while train_monitor.num_episodes <= episodes:
+            e_r, e_s = self.episode(world, n_walls, self.state_sequence_buffer, self.memory_replay_buffer, compute_loss_and_update, update_target_networks)
+            train_monitor.update(e_r, e_s, self.episode.get_execution_time())
+            self.lower.check_status(id=train_monitor.num_episodes, reward=e_r)                
 
-            if number_of_sims % 250 == 0:      
-                pl = Plot_env(w, self.lower)
-                self.save_policy_stats(self.path_to_weights + "/tmp/")
-                print(f"Current learning rate: {self.lr_scheduler.get_last_lr()}.")
-                print(f"Current epsilon: {epsilon}.")
+            self.save_policy_stats(self.path_to_weights + "/tmp/")
     
-    
-    def compute_sac_loss(self, memory_replay, batch_size, gamma = 0.95):
-        if len(memory_replay) < batch_size:
-            return
-        previous_states, actions, rewards, next_states, dones = memory_replay.sample(batch_size)
-
-        # Critic loss
-        with torch.no_grad():
-            next_probabilities = self.actor(next_states)
-            next_action_values1 = self.target_critic1(next_states)
-            next_action_values2 = self.target_critic2(next_states)
-            next_action_values = torch.min(next_action_values1, next_action_values2)
-            next_state_values = (next_probabilities * (next_action_values - 0.95 * torch.log(next_probabilities + 1e-6))).sum(dim=-1)
-            target_q_values = rewards + gamma * (1 - dones) * next_state_values
-
-        current_q1 = self.critic1(previous_states).squeeze(1).gather(1, actions).squeeze(-1)
-        current_q2 = self.critic2(previous_states).squeeze(1).gather(1, actions).squeeze(-1)
-        critic1_loss = nn.MSELoss()(current_q1, target_q_values)
-        critic2_loss = nn.MSELoss()(current_q2, target_q_values)
-
-        self.critic1_optimizer.zero_grad()
-        critic1_loss.backward()
-        self.critic1_optimizer.step()
-
-        self.critic2_optimizer.zero_grad()
-        critic2_loss.backward()
-        self.critic2_optimizer.step()
-
-         # Update Actor
-        probs = self.actor(previous_states)
-        q1 = self.critic1(previous_states)
-        q2 = self.critic2(previous_states)
-        min_q = torch.min(q1, q2)
-        actor_loss = (probs * (0.2 * torch.log(probs + 1e-6) - min_q)).sum(dim=-1).mean()
-
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
-
-        # Update Alpha
-        entropy = -torch.sum(probs * torch.log(probs + 1e-6), dim=-1).mean()
-        alpha_loss = -(self.log_alpha * (entropy + -1).detach()).mean()
-        self.alpha_optimizer.zero_grad()
-        alpha_loss.backward()
-        self.alpha_optimizer.step()
-        self.alpha = self.log_alpha.exp()
-
-        # Soft update target networks
-        self.soft_update(self.target_critic1, self.critic1)
-        self.soft_update(self.target_critic2, self.critic2)
-
-    def soft_update(self, target_net, source_net):
-        for target_param, source_param in zip(target_net.parameters(), source_net.parameters()):
-            target_param.data.copy_(0.005 * source_param.data + (1 - 0.005) * target_param.data)
-    
-    def compute_dqn_loss(self, memory_replay, batch_size, gamma = 0.95):
-        if len(memory_replay) < batch_size:
-            return
-        previous_states, actions, rewards, next_states, dones = memory_replay.sample(batch_size)
-
-        # Compute Q-values for current states
-        q_values = self.policy(previous_states).squeeze().gather(1, actions[:, -1].unsqueeze(1))
-
-        # Compute target Q-values using the target network
-        with torch.no_grad():
-            max_next_q_values = self.target_network(next_states).squeeze().max(1)[0]
-            target_q_values = rewards[:, -1].squeeze() + gamma * max_next_q_values * (1 - dones[:, -1].squeeze())
-
-        return nn.MSELoss()(q_values.squeeze(), target_q_values)
 
     def compute_reinforce_loss(self, policy, states, actions, rewards, gamma=0.99):
         """
@@ -584,7 +486,9 @@ class Rob_controller():
         if not os.path.exists(path):
             Path(path).mkdir(parents=True, exist_ok=True)
 
-        torch.save(self.policy.state_dict(), path+"/policy_weights.pth")
+        for k, v in self.networks.items():
+            torch.save(self.networks[k].state_dict(), path+f"/{k}_policy_weights.pth")
+
         with open(path+f"/state_stats.pkl", 'wb') as handle:
             pickle.dump(self.state_stats, handle, protocol=pickle.HIGHEST_PROTOCOL)
         print(f"saved weights and stats to {path}")
@@ -592,7 +496,8 @@ class Rob_controller():
     def load_policy_stats(self, path):
         with open(path+"/state_stats.pkl", 'rb') as handle:
             self.state_stats = pickle.load(handle)
-        self.policy.load_state_dict(torch.load(path+"/policy_weights.pth", weights_only=True))
-        self.policy.eval()
+        for k, v in self.networks.items():
+            self.networks[k].load_state_dict(torch.load(path+f"/{k}_policy_weights.pth", weights_only=True))
+            self.networks[k].eval()
         print(f"loaded weights and stats from {path}")
 

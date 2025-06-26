@@ -1,20 +1,50 @@
 import torch
 from torch import nn
 import math
+import numpy as np
 
 from constants import MODEL_DIMENSIONS
 
-def get_policy(name: str = "dqn_simple"):
+def get_networks(name: str = "dqn_simple", device="cpu", lr=1e-5):
+    networks_dict = {}
+    optimizer_dict = {}
+
     if name == "dqn_simple":
-        return DQNSimplePolicyNetwork(**MODEL_DIMENSIONS)
+        networks_dict["actor"] = DQNSimplePolicyNetwork(**MODEL_DIMENSIONS).to(device)
+        networks_dict["target"] = DQNSimplePolicyNetwork(**MODEL_DIMENSIONS).load_state_dict(networks_dict["actor"].state_dict()).to(device)
+        optimizer_dict["actor"] = torch.optim.Adam(networks_dict["actor"].parameters(), lr=lr)
+
     elif name == "dqn_lstm":
-        return DQNLSTMPolicyNetwork(**MODEL_DIMENSIONS)
+        networks_dict["actor"] = DQNLSTMPolicyNetwork(**MODEL_DIMENSIONS).to(device)
+
     elif name == "dqn_transformer":
-        return DQNTransformerPolicyNetwork(**MODEL_DIMENSIONS)
+        networks_dict["actor"] = DQNTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
+        networks_dict["target"] = DQNTransformerPolicyNetwork(**MODEL_DIMENSIONS).load_state_dict(networks_dict["actor"].state_dict()).to(device)
+        optimizer_dict["actor"] = torch.optim.Adam(networks_dict["actor"].parameters(), lr=lr)
+        
     elif name == "reinforce_simple":
-        return ReinforceSimplePolicyNetwork(**MODEL_DIMENSIONS)
+        networks_dict["actor"] = ReinforceSimplePolicyNetwork(**MODEL_DIMENSIONS).to(device)
+
     elif name == "reinforce_lstm":
-        return ReinforceLSTMPolicyNetwork(**MODEL_DIMENSIONS)
+        networks_dict["actor"] = ReinforceLSTMPolicyNetwork(**MODEL_DIMENSIONS).to(device)
+
+    elif name == "sac_transformer":
+        networks_dict["actor"] = ActorTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
+        networks_dict["critic1"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
+        networks_dict["critic2"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
+        networks_dict["target1"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).load_state_dict(networks_dict["critic1"].state_dict()).to(device)
+        networks_dict["target2"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).load_state_dict(networks_dict["critic2"].state_dict()).to(device)
+        networks_dict["log_alpha"] = torch.tensor(np.log(0.2), requires_grad=True)
+        optimizer_dict["actor"] = torch.optim.Adam(networks_dict["actor"].parameters(), lr=lr)
+        optimizer_dict["critic1"] = torch.optim.Adam(networks_dict["critic1"].parameters(), lr=lr)
+        optimizer_dict["critic2"] = torch.optim.Adam(networks_dict["critic2"].parameters(), lr=lr)
+        optimizer_dict["log_alpha"] = torch.optim.Adam([networks_dict["log_alpha"]], lr=lr)
+
+
+    # for all policies there has to be an optimzer for the actor
+    optimizer_dict["actor"] = torch.optim.Adam(networks_dict["actor"].parameters(), lr=lr)
+
+    return networks_dict, optimizer_dict
     
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, device, max_len=5000):
@@ -159,6 +189,7 @@ class ReinforceSimplePolicyNetwork(nn.Module):
 class ReinforceLSTMPolicyNetwork(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=128):
         super(ReinforceLSTMPolicyNetwork, self).__init__()
+
         self.lstm = nn.LSTM(state_dim, hidden_dim, batch_first=True)  # LSTM layer
         self.fc = nn.Linear(hidden_dim, action_dim)  # Fully connected layer
         self.softmax = nn.Softmax(dim=-1)  # Action probabilities
