@@ -4,9 +4,7 @@ import torch
 import numpy as np
 import random
 import time
-
-from plotting import Plot_metric
-
+from functools import wraps
 
 def is_intersection(linea: Tuple[Tuple[float, float]], lineb: Tuple[Tuple[float, float]], get_point=False):
 
@@ -276,39 +274,25 @@ class TimerDecorator:
     def get_execution_time(self):
         return self.execution_time
 
-class TrainMonitor():
-    """
-    class to monitor training progress
-    """
-    def __init__(self):
-        self.num_episodes = 0
-        self.total_steps = 0
-        self.performance_metric_coll, self.performance_metric_coll_ma = [], []
-        self.computation_metric_coll, self.computation_metric_coll_ma = [], []
-        self.pmetric = Plot_metric(
-            [self.performance_metric_coll_ma, self.computation_metric_coll_ma], 
-            y_labels=["step reward", "time per episode"], 
-            x_labels=["episodes", "episodes"], 
-            titles=["avg. reward per step", "avg. time per episode"]
-        )
+def timer_decorator(func):
+    execution_time = {"time": None}  # Use a mutable object to store execution time
 
-        self.grace_period = 100
-        self.ma_window = 1000
+    @wraps(func)  # Preserve original function metadata
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        execution_time["time"] = end_time - start_time
+        return result
 
-    def update(self, episode_reward, episode_steps, comp_time):
-        self.num_episodes += 1
-        self.total_steps += episode_steps
+    # Add a method to retrieve the execution time
+    def get_execution_time():
+        return execution_time["time"]
 
-        self.performance_metric_coll.append(episode_reward / episode_steps)
-        self.computation_metric_coll.append(comp_time)
+    # Attach the method to the wrapper function
+    wrapper.get_execution_time = get_execution_time
 
-        if self.num_episodes > self.grace_period:
-            self.performance_metric_coll_ma.append(
-                    (sum(self.performance_metric_coll[-self.ma_window:])) / min(len(self.performance_metric_coll), self.ma_window)
-                )
-            self.computation_metric_coll_ma.append(
-                    (sum(self.computation_metric_coll[-self.ma_window:])) / min(len(self.computation_metric_coll), self.ma_window)
-                )
+    return wrapper
 
 
 def optimzer_wrapper(optimizer, loss):

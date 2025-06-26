@@ -66,11 +66,14 @@ def generate_world(mode=["random", "simple"], n_walls=0, fuel=300):
         else:
             goal = candidate_2
             starting_point = candidate_1
-    
-    r = Rob_body(w, init_pos=starting_point, fuel_tank=fuel)
-    w = Rob_world(walls, goal, r)
+    else:
+        raise ValueError(f"Unsupported mode: {mode}")
 
-    return w, 
+    w = Rob_world(walls, goal)
+    r = Rob_body(w, init_pos=starting_point, fuel_tank=fuel)
+    w.robot = r
+
+    return w, r
 
 class Rob_world():
     def __init__(self, walls = {}, goal=(0,0), robot=None):

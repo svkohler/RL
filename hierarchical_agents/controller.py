@@ -8,13 +8,12 @@ import random
 import copy
 import numpy as np
 from torch import nn
-import matplotlib.pyplot as plt
 
-from policy_networks import ActorTransformerPolicyNetwork, CriticTransformerPolicyNetwork
+from training_monitor import TrainMonitor
 from world import Rob_world, generate_random_walls, generate_point, generate_world
 from robot import Rob_body
 
-from helper import RunningStatsState, TimerDecorator, TrainMonitor, distance_between_point, OptimizedSequenceMemoryBuffer, OptimizedSequenceBuffer, monitor, optimzer_wrapper, status_check, update_target_network
+from helper import RunningStatsState, TimerDecorator, distance_between_point, OptimizedSequenceMemoryBuffer, OptimizedSequenceBuffer, optimzer_wrapper, timer_decorator, update_target_network
 
 from plotting import Plot_env, Plot_metric
 
@@ -28,18 +27,18 @@ TARGET_ENTROPY = -1
 
 class Rob_controller(): 
     
-    def __init__(self, lower, networks, pretrained=True, path_to_weights=None, lr=1e-5, device="cpu"):
+    def __init__(self, robot, networks, pretrained=True, path_to_weights=None, lr=1e-5, device="cpu"):
        """The lower-level for the middle layer is the body.
        """
        self.device = device
        self.path_to_weights = path_to_weights
-       self.lower = lower
+       self.robot = robot
        self.close_threshold = 2 # distance that is close enough to arrived
 
        self.state = None
        self.previous_state = None
        self.current_goal = None
-       self.input_size = 6+len(self.lower.whisker_set.set)
+       self.input_size = 6+len(self.robot.whisker_set.set)
 
        self.networks, self.optimizers = networks
 
@@ -51,13 +50,13 @@ class Rob_controller():
 
     def return_state(self, as_list=False, standardized=False): 
         state = {
-            "x_pos": self.lower.rob_x,
-            "y_pos": self.lower.rob_y,
-            "dir": self.lower.rob_dir,
-            "fuel": self.lower.fuel/self.lower.fuel_tank,
-            "dx_goal": self.current_goal[0] - self.lower.rob_x,
-            "dy_goal": self.current_goal[1] - self.lower.rob_y,
-            **{f"whisker_reading_{i}": whisk.dist_2_nearest_wall for i,whisk in enumerate(self.lower.whisker_set.set)}
+            "x_pos": self.robot.rob_x,
+            "y_pos": self.robot.rob_y,
+            "dir": self.robot.rob_dir,
+            "fuel": self.robot.fuel/self.robot.fuel_tank,
+            "dx_goal": self.current_goal[0] - self.robot.rob_x,
+            "dy_goal": self.current_goal[1] - self.robot.rob_y,
+            **{f"whisker_reading_{i}": whisk.dist_2_nearest_wall for i,whisk in enumerate(self.robot.whisker_set.set)}
         }
         if as_list:
             if standardized:
@@ -81,25 +80,25 @@ class Rob_controller():
         else:
             reward += diff
 
-        if self.lower.arrived:
+        if self.robot.arrived:
             reward += arr_reward
         
-        elif self.lower.crashed:
+        elif self.robot.crashed:
             reward += crash_pen
 
-        elif self.lower.fuel == 0:
+        elif self.robot.fuel == 0:
             reward += out_of_fuel_pen
 
         return reward
     
     # Function to choose action using epsilon-greedy policy
-    def select_action(self, epsilon=0.0, mode="max"):
+    def select_action(self, ssb, epsilon=0.0, mode="max"):
         # with torch.no_grad():
         # random choice (when you want to skip random choice, then choose epsilon == 0.0 (default))
         if random.random() < epsilon:
             return np.random.choice(ACTION_SPACE)  # Explore
         else:
-            state = torch.FloatTensor(self.state_sequence_buffer[3]).unsqueeze(0).to(self.device)
+            state = torch.FloatTensor(ssb[3]).unsqueeze(0).to(self.device)
             
             output = self.networks["actor"](state)
 
@@ -131,21 +130,21 @@ class Rob_controller():
             action_taken = self.select_action(state_sequence_buffer.content(), epsilon=0)
 
             # execute that action
-            self.lower.do({"steer": INT_2_DIR[action_taken]})
+            self.robot.do({"steer": INT_2_DIR[action_taken]})
 
             self.state = self.return_state(as_list=True, standardized=standardized)
 
             self.check_arrived()
 
-            done = self.lower.fuel == 0 or self.lower.arrived or self.lower.crashed
+            done = self.robot.fuel == 0 or self.robot.arrived or self.robot.crashed
 
-        self.lower.check_status()
+        self.robot.check_status()
 
         pl = Plot_env(world, body)
 
         pl.show_and_close(5)
 
-    def step(self, state_sequence_buffer, epsilon=0.0):
+    def step(self, state_sequence_buffer, epsilon=0.0, action_mode="max"):
         """
         the controller executes a single step with the robot
         returns a tuple (previous_state, action, reward, next_state, done)
@@ -155,9 +154,9 @@ class Rob_controller():
 
         self.state_stats.update(self.return_state(as_list=True))
 
-        action_taken = self.select_action(state_sequence_buffer, epsilon)
+        action_taken = self.select_action(state_sequence_buffer.content(), epsilon, mode=action_mode)
 
-        self.lower.do({"steer": INT_2_DIR[action_taken]})
+        self.robot.do({"steer": INT_2_DIR[action_taken]})
 
         self.state = self.return_state(as_list=True)
 
@@ -165,29 +164,30 @@ class Rob_controller():
 
         self.check_arrived()
 
-        done = self.lower.fuel == 0 or self.lower.arrived or self.lower.crashed
+        done = self.robot.fuel == 0 or self.robot.arrived or self.robot.crashed
 
         return self.previous_state, action_taken, reward, self.state, done
 
-    @TimerDecorator
+    # @TimerDecorator
+    @timer_decorator
     def episode(
             self, 
             world="simple", 
             n_walls = 3, 
             fuel=300, 
             sequence_length=1,
-            epsilon=1.0,
             state_sequence_buffer=None, 
             memory_replay_buffer=None,
             loss_and_update_function=None,
             update_target_network_function=None,
+            epsilon=1.0,
+            action_mode="max",
             ):
         """
         the controller executes a whole episode with the robot during training
         """
-
         # generate world for episode
-        w, r = generate_world(mode=world, n_walls=n_walls, fuel=fuel)
+        w, self.robot = generate_world(mode=world, n_walls=n_walls, fuel=fuel)
         self.current_goal = w.goal
 
         # init state
@@ -202,7 +202,7 @@ class Rob_controller():
         episode_steps = 0
 
         while not done:
-            ps, a, r, ns, d = self.step()
+            ps, a, r, ns, d = self.step(state_sequence_buffer, epsilon=epsilon, action_mode=action_mode)
             done = d
             episode_reward += r
             episode_steps += 1
@@ -219,7 +219,8 @@ class Rob_controller():
                     update_target_network_function()
         
         if rand < 0.004:
-            pl = Plot_env(w, self.lower)
+            pl = Plot_env(w, self.robot)
+            self.save_policy_stats(self.path_to_weights + "/tmp/")
 
         return episode_reward, episode_steps
         
@@ -231,7 +232,8 @@ class Rob_controller():
             epsilon=1.0, 
             sequence_length=1,
             n_walls=3, 
-            world="simple"
+            world="simple",
+            fuel=300
         ):
 
         def compute_loss_and_update():
@@ -249,9 +251,7 @@ class Rob_controller():
 
             loss = nn.MSELoss()(q_values.squeeze(), target_q_values)
 
-            self.optimizers["actor"].zero_grad()
-            loss.backward()
-            self.optimizers["actor"].step()
+            optimzer_wrapper(self.optimizers["actor"], loss)
 
         def update_target_networks():
             self.networks["target"].load_state_dict(self.networks["actor"].state_dict())
@@ -269,11 +269,9 @@ class Rob_controller():
         train_monitor = TrainMonitor()
 
         while train_monitor.num_episodes <= episodes:
-            e_r, e_s = self.episode(world, n_walls, self.state_sequence_buffer, self.memory_replay_buffer, compute_loss_and_update, update_target_networks)
+            e_r, e_s = self.episode(world, n_walls, fuel, sequence_length, self.state_sequence_buffer, self.memory_replay_buffer, compute_loss_and_update, update_target_networks)
             train_monitor.update(e_r, e_s, self.episode.get_execution_time())
-            self.lower.check_status(id=train_monitor.num_episodes, reward=e_r)                
-
-            self.save_policy_stats(self.path_to_weights + "/tmp/")
+            self.robot.check_status(id=train_monitor.num_episodes, reward=e_r)                
 
 
     def train_reinforce(self, batch_size=64, simulations=1280, max_length=2000):
@@ -299,14 +297,14 @@ class Rob_controller():
                 # each simulation has a specific goal, set of walls and initial starting point
                 self.current_goal  = generate_point()
                 w = Rob_world(walls = generate_random_walls(0), goal=self.current_goal)
-                self.lower = Rob_body(w, init_pos=generate_point(), fuel_tank=max_length)
+                self.robot = Rob_body(w, init_pos=generate_point(), fuel_tank=max_length)
 
                 # empty trajectory to collect states, actions, rewards
                 trajectory = []
 
                 self.policy.reset()
 
-                while self.lower.fuel > 0 and not self.lower.arrived and not self.lower.crashed:
+                while self.robot.fuel > 0 and not self.robot.arrived and not self.robot.crashed:
                     with torch.no_grad():
 
                         # save the old state in order to calculate reward later on
@@ -324,7 +322,7 @@ class Rob_controller():
                         action_taken = np.random.choice([0, 1, 2, 3], p=np.array(action_probs.detach().flatten()))
 
                         # execute that action
-                        self.lower.do({"steer": INT_2_DIR[action_taken]})
+                        self.robot.do({"steer": INT_2_DIR[action_taken]})
 
                         self.check_arrived()
 
@@ -337,7 +335,7 @@ class Rob_controller():
 
                 states, actions, rewards = zip(*trajectory)
                 
-                self.lower.check_status(id=number_of_sims, reward=np.sum(rewards))
+                self.robot.check_status(id=number_of_sims, reward=np.sum(rewards))
 
                 # fill batch_tensors from the back in order to clip it efficiently
                 batch_states[i,(max_length-len(states)):,:] = torch.tensor(states, dtype=torch.float32)
@@ -348,7 +346,7 @@ class Rob_controller():
                     min_length_traj = len(trajectory)
 
                 if number_of_sims % 250 == 0:      
-                    pl = Plot_env(w, self.lower)
+                    pl = Plot_env(w, self.robot)
 
             return_per_timestep.append(torch.mean(batch_rewards))
             ploss = Plot_metric(return_per_timestep[-2000:])
@@ -375,7 +373,8 @@ class Rob_controller():
             memory_length=10000, 
             sequence_length=1,
             n_walls=3, 
-            world="simple"
+            world="simple",
+            fuel=300
     ):
         def compute_loss_and_update():
             if len(self.memory_replay_buffer) < batch_size:
@@ -384,7 +383,7 @@ class Rob_controller():
 
             # Update critic
             with torch.no_grad():
-                next_probabilities = self.actor(next_states)
+                next_probabilities = self.networks["actor"](next_states)
                 next_action_values1 = self.networks["target1"](next_states)
                 next_action_values2 = self.networks["target2"](next_states)
                 next_action_values = torch.min(next_action_values1, next_action_values2)
@@ -400,7 +399,7 @@ class Rob_controller():
             optimzer_wrapper(self.optimizers["critic2"], critic2_loss)
 
             # Update Actor
-            probs = self.actor(previous_states)
+            probs = self.networks["actor"](previous_states)
             q1 = self.networks["critic1"](previous_states)
             q2 = self.networks["critic2"](previous_states)
             min_q = torch.min(q1, q2)
@@ -415,7 +414,6 @@ class Rob_controller():
             optimzer_wrapper(self.optimizers["log_alpha"], alpha_loss)
 
             self.alpha = self.networks["log_alpha"].exp()
-
 
         def update_target_networks():
             for target_source in [("target1", "critic1"), ("target2", "critic2")]:
@@ -435,11 +433,10 @@ class Rob_controller():
         train_monitor = TrainMonitor()
 
         while train_monitor.num_episodes <= episodes:
-            e_r, e_s = self.episode(world, n_walls, self.state_sequence_buffer, self.memory_replay_buffer, compute_loss_and_update, update_target_networks)
+            e_r, e_s = self.episode(world, n_walls, fuel, sequence_length, self.state_sequence_buffer, self.memory_replay_buffer, compute_loss_and_update, update_target_networks, action_mode="prob")
             train_monitor.update(e_r, e_s, self.episode.get_execution_time())
-            self.lower.check_status(id=train_monitor.num_episodes, reward=e_r)                
-
-            self.save_policy_stats(self.path_to_weights + "/tmp/")
+            self.robot.check_status(id=train_monitor.num_episodes, reward=e_r)                
+            
     
 
     def compute_reinforce_loss(self, policy, states, actions, rewards, gamma=0.99):
@@ -476,10 +473,10 @@ class Rob_controller():
     def check_arrived(self):
         """ middle layer also checks whether roboter has arrived at said destination
         """
-        current_percept = self.lower.return_state()
+        current_percept = self.robot.return_state()
         location_rob = (current_percept["rob_x_pos"], current_percept["rob_y_pos"])
         if distance_between_point(location_rob, self.current_goal) < self.close_threshold:
-            self.lower.arrived = True
+            self.robot.arrived = True
 
     def save_policy_stats(self, path):
 
@@ -487,7 +484,8 @@ class Rob_controller():
             Path(path).mkdir(parents=True, exist_ok=True)
 
         for k, v in self.networks.items():
-            torch.save(self.networks[k].state_dict(), path+f"/{k}_policy_weights.pth")
+            if not isinstance(v, torch.Tensor):
+                torch.save(self.networks[k].state_dict(), path+f"/{k}_policy_weights.pth")
 
         with open(path+f"/state_stats.pkl", 'wb') as handle:
             pickle.dump(self.state_stats, handle, protocol=pickle.HIGHEST_PROTOCOL)

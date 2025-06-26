@@ -11,7 +11,8 @@ def get_networks(name: str = "dqn_simple", device="cpu", lr=1e-5):
 
     if name == "dqn_simple":
         networks_dict["actor"] = DQNSimplePolicyNetwork(**MODEL_DIMENSIONS).to(device)
-        networks_dict["target"] = DQNSimplePolicyNetwork(**MODEL_DIMENSIONS).load_state_dict(networks_dict["actor"].state_dict()).to(device)
+        networks_dict["target"] = DQNSimplePolicyNetwork(**MODEL_DIMENSIONS).to(device)
+        networks_dict["target"].load_state_dict(networks_dict["actor"].state_dict())
         optimizer_dict["actor"] = torch.optim.Adam(networks_dict["actor"].parameters(), lr=lr)
 
     elif name == "dqn_lstm":
@@ -19,7 +20,8 @@ def get_networks(name: str = "dqn_simple", device="cpu", lr=1e-5):
 
     elif name == "dqn_transformer":
         networks_dict["actor"] = DQNTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
-        networks_dict["target"] = DQNTransformerPolicyNetwork(**MODEL_DIMENSIONS).load_state_dict(networks_dict["actor"].state_dict()).to(device)
+        networks_dict["target"] = DQNTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
+        networks_dict["target"].load_state_dict(networks_dict["actor"].state_dict())
         optimizer_dict["actor"] = torch.optim.Adam(networks_dict["actor"].parameters(), lr=lr)
         
     elif name == "reinforce_simple":
@@ -32,14 +34,15 @@ def get_networks(name: str = "dqn_simple", device="cpu", lr=1e-5):
         networks_dict["actor"] = ActorTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
         networks_dict["critic1"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
         networks_dict["critic2"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
-        networks_dict["target1"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).load_state_dict(networks_dict["critic1"].state_dict()).to(device)
-        networks_dict["target2"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).load_state_dict(networks_dict["critic2"].state_dict()).to(device)
+        networks_dict["target1"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
+        networks_dict["target1"].load_state_dict(networks_dict["critic1"].state_dict())
+        networks_dict["target2"] = CriticTransformerPolicyNetwork(**MODEL_DIMENSIONS).to(device)
+        networks_dict["target2"].load_state_dict(networks_dict["critic2"].state_dict())
         networks_dict["log_alpha"] = torch.tensor(np.log(0.2), requires_grad=True)
         optimizer_dict["actor"] = torch.optim.Adam(networks_dict["actor"].parameters(), lr=lr)
         optimizer_dict["critic1"] = torch.optim.Adam(networks_dict["critic1"].parameters(), lr=lr)
         optimizer_dict["critic2"] = torch.optim.Adam(networks_dict["critic2"].parameters(), lr=lr)
         optimizer_dict["log_alpha"] = torch.optim.Adam([networks_dict["log_alpha"]], lr=lr)
-
 
     # for all policies there has to be an optimzer for the actor
     optimizer_dict["actor"] = torch.optim.Adam(networks_dict["actor"].parameters(), lr=lr)

@@ -1,10 +1,8 @@
 import pathlib
 import argparse
 
-from world import generate_random_point, generate_world
+from world import generate_world
 from controller import Rob_controller
-from robot import Rob_body
-from helper import RunningStatsState
 
 from policy_networks import *
 
@@ -31,9 +29,8 @@ print(args)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-w, starting_point = generate_world(mode="simple", n_walls=args.n_walls)
-b = Rob_body(w, init_pos=starting_point, fuel_tank=args.fuel)
-mid = Rob_controller(b, 
+w, r = generate_world(mode="simple", n_walls=args.n_walls)
+mid = Rob_controller(r, 
                      networks=get_networks(args.policy, device), 
                      pretrained=args.pretrained, 
                      path_to_weights=str(pathlib.Path(__file__).parent.resolve())+"/policy_stats/"+args.policy + "/" + args.world, 
@@ -42,19 +39,19 @@ mid = Rob_controller(b,
                      )
 
 def inf():
-    mid.do(w, b, action={"go_to": w.goal}, sequence_length=args.sequence_length, standardized=args.standardized)
+    mid.do(w, r, action={"go_to": w.goal}, sequence_length=args.sequence_length, standardized=args.standardized)
 
 def train_policy():
 
     mid.train_actor_critic(
         batch_size=args.batch_size, 
-        simulations=args.simulations, 
+        episodes=args.simulations, 
         memory_length=args.mem_length, 
-        epsilon=args.epsilon, 
+        # epsilon=args.epsilon, 
         sequence_length=args.sequence_length, 
         n_walls=args.n_walls, 
-        standardized=args.standardized,
-        world=args.world
+        world=args.world,
+        fuel=args.fuel
         )
 
     mid.save_policy_stats(path=str(pathlib.Path(__file__).parent.resolve())+"/policy_stats/"+args.policy + "/" + args.world)
