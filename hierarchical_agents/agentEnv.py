@@ -1,5 +1,6 @@
 import pathlib
 import argparse
+import matplotlib.pyplot as plt
 
 from world import generate_world
 from controller import Rob_controller
@@ -28,6 +29,8 @@ print("program gets executed with the following arguments:")
 print(args)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+plt.ion()
 
 w, r = generate_world(mode="simple", n_walls=args.n_walls)
 mid = Rob_controller(r, 
@@ -63,3 +66,6 @@ if __name__ == "__main__":
         train_policy()
     elif args.mode == "inf":
         inf()
+
+    plt.ioff()
+    plt.show()

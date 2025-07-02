@@ -9,6 +9,7 @@ class TrainMonitor():
         self.total_steps = 0
         self.performance_metric_coll, self.performance_metric_coll_ma = [], []
         self.computation_metric_coll, self.computation_metric_coll_ma = [], []
+        
         self.pmetric = Plot_metric(
             [self.performance_metric_coll_ma, self.computation_metric_coll_ma], 
             y_labels=["step reward", "time per episode"], 
@@ -33,4 +34,6 @@ class TrainMonitor():
             self.computation_metric_coll_ma.append(
                     (sum(self.computation_metric_coll[-self.ma_window:])) / min(len(self.computation_metric_coll), self.ma_window)
                 )
-        self.pmetric.redraw([self.performance_metric_coll_ma, self.computation_metric_coll_ma])
+            
+        self.pmetric.update([self.performance_metric_coll_ma, self.computation_metric_coll_ma])
+            

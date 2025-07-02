@@ -168,7 +168,6 @@ class Rob_controller():
 
         return self.previous_state, action_taken, reward, self.state, done
 
-    # @TimerDecorator
     @timer_decorator
     def episode(
             self, 
@@ -219,7 +218,7 @@ class Rob_controller():
                     update_target_network_function()
         
         if rand < 0.004:
-            pl = Plot_env(w, self.robot)
+            # pl = Plot_env(w, self.robot)
             self.save_policy_stats(self.path_to_weights + "/tmp/")
 
         return episode_reward, episode_steps
@@ -256,6 +255,7 @@ class Rob_controller():
         def update_target_networks():
             self.networks["target"].load_state_dict(self.networks["actor"].state_dict())
             self.epsilon = max(EPSILON_MIN, (self.epsilon * EPSILON_DECAY))
+            print(f"new epsilon: {self.epsilon}")
         
         # set the exploitation-exploration parameter
         self.epsilon = epsilon
@@ -269,7 +269,15 @@ class Rob_controller():
         train_monitor = TrainMonitor()
 
         while train_monitor.num_episodes <= episodes:
-            e_r, e_s = self.episode(world, n_walls, fuel, sequence_length, self.state_sequence_buffer, self.memory_replay_buffer, compute_loss_and_update, update_target_networks)
+            e_r, e_s = self.episode(world, 
+                                    n_walls, 
+                                    fuel, 
+                                    sequence_length, 
+                                    self.state_sequence_buffer, 
+                                    self.memory_replay_buffer, 
+                                    compute_loss_and_update, 
+                                    update_target_networks,
+                                    epsilon=self.epsilon)
             train_monitor.update(e_r, e_s, self.episode.get_execution_time())
             self.robot.check_status(id=train_monitor.num_episodes, reward=e_r)                
 
@@ -387,7 +395,7 @@ class Rob_controller():
                 next_action_values1 = self.networks["target1"](next_states)
                 next_action_values2 = self.networks["target2"](next_states)
                 next_action_values = torch.min(next_action_values1, next_action_values2)
-                next_state_values = (next_probabilities * (next_action_values - 0.95 * torch.log(next_probabilities + 1e-6))).sum(dim=-1)
+                next_state_values = (next_probabilities * (next_action_values - self.alpha * torch.log(next_probabilities + 1e-6))).sum(dim=-1)
                 target_q_values = rewards + GAMMA * (1 - dones) * next_state_values
 
             current_q1 = self.networks["critic1"](previous_states).squeeze(1).gather(1, actions).squeeze(-1)
@@ -403,7 +411,7 @@ class Rob_controller():
             q1 = self.networks["critic1"](previous_states)
             q2 = self.networks["critic2"](previous_states)
             min_q = torch.min(q1, q2)
-            actor_loss = (probs * (0.2 * torch.log(probs + 1e-6) - min_q)).sum(dim=-1).mean()
+            actor_loss = (probs * (self.alpha * torch.log(probs + 1e-6) - min_q)).sum(dim=-1).mean()
 
             optimzer_wrapper(self.optimizers["actor"], actor_loss)
 
@@ -433,7 +441,16 @@ class Rob_controller():
         train_monitor = TrainMonitor()
 
         while train_monitor.num_episodes <= episodes:
-            e_r, e_s = self.episode(world, n_walls, fuel, sequence_length, self.state_sequence_buffer, self.memory_replay_buffer, compute_loss_and_update, update_target_networks, action_mode="prob")
+            e_r, e_s = self.episode(world, 
+                                    n_walls, 
+                                    fuel, 
+                                    sequence_length, 
+                                    self.state_sequence_buffer, 
+                                    self.memory_replay_buffer, 
+                                    compute_loss_and_update, 
+                                    update_target_networks, 
+                                    action_mode="prob"
+                                    )
             train_monitor.update(e_r, e_s, self.episode.get_execution_time())
             self.robot.check_status(id=train_monitor.num_episodes, reward=e_r)                
             
