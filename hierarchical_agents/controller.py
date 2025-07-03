@@ -214,8 +214,9 @@ class Rob_controller():
             rand = random.random()
             if rand < 0.2:
                 loss_and_update_function()
-                if rand < 0.0001:
-                    update_target_network_function()
+                # if rand < 0.0001:
+                #     update_target_network_function()
+            update_target_network_function()
         
         if rand < 0.004:
             # pl = Plot_env(w, self.robot)
@@ -424,8 +425,8 @@ class Rob_controller():
             self.alpha = self.networks["log_alpha"].exp()
 
         def update_target_networks():
-            for target_source in [("target1", "critic1"), ("target2", "critic2")]:
-                update_target_network(target_source[0], target_source[1])
+            for target_source in [(self.networks["target1"], self.networks["critic1"]), (self.networks["target2"], self.networks["critic2"])]:
+                update_target_network(target_source[0], target_source[1], mode="soft")
 
         self.alpha = self.networks["log_alpha"].exp()
 

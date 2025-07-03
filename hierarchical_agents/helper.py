@@ -308,6 +308,7 @@ def update_target_network(target, source, mode=["hard", "soft"], tau=0.005):
     function updates target with parameters from a source network
     return: None
     """
+
     if mode=="hard":
         target.load_state_dict(source.state_dict())
     elif mode == "soft":
@@ -315,6 +316,8 @@ def update_target_network(target, source, mode=["hard", "soft"], tau=0.005):
         source_state_dict = source.state_dict()
         for key in source_state_dict:
             target_state_dict[key] = source_state_dict[key]*tau + target_state_dict[key]*(1-tau)
+    else:
+        raise ValueError("please define mode for updates")
 
 
 
