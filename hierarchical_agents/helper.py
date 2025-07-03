@@ -3,7 +3,8 @@ from typing import Tuple
 import torch
 import numpy as np
 import random
-
+import time
+from functools import wraps
 
 def is_intersection(linea: Tuple[Tuple[float, float]], lineb: Tuple[Tuple[float, float]], get_point=False):
 
@@ -257,3 +258,64 @@ class OptimizedSequenceBuffer:
         - int: Number of sequences currently stored in the buffer.
         """
         return self.size
+
+class TimerDecorator:
+    def __init__(self, func):
+        self.func = func
+        self.execution_time = None # Store the time taken for the function
+
+    def __call__(self, *args, **kwargs):
+        start_time = time.perf_counter()
+        result = self.func(*args, **kwargs)
+        end_time = time.perf_counter()
+        self.execution_time = end_time - start_time
+        return result
+
+    def get_execution_time(self):
+        return self.execution_time
+
+def timer_decorator(func):
+    execution_time = {"time": None}  # Use a mutable object to store execution time
+
+    @wraps(func)  # Preserve original function metadata
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        execution_time["time"] = end_time - start_time
+        return result
+
+    # Add a method to retrieve the execution time
+    def get_execution_time():
+        return execution_time["time"]
+
+    # Attach the method to the wrapper function
+    wrapper.get_execution_time = get_execution_time
+
+    return wrapper
+
+
+def optimzer_wrapper(optimizer, loss):
+    """
+    wrap lines into a function such that they dont have to be repeated multiple times
+    """
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+def update_target_network(target, source, mode=["hard", "soft"], tau=0.005):
+    """
+    function updates target with parameters from a source network
+    return: None
+    """
+    if mode=="hard":
+        target.load_state_dict(source.state_dict())
+    elif mode == "soft":
+        target_state_dict = target.state_dict()
+        source_state_dict = source.state_dict()
+        for key in source_state_dict:
+            target_state_dict[key] = source_state_dict[key]*tau + target_state_dict[key]*(1-tau)
+
+
+
+            

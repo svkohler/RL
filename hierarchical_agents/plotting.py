@@ -62,6 +62,7 @@ class Plot_env():
                     plt.plot([pos[0], w[0]],[pos[1], w[1]], color="grey", alpha=0.3)
                 plt.draw()
                 plt.pause(0.001)
+                plt.close()
     
     def show_and_close(self, duration=5):
         """Shows the plot for a specified duration (in seconds) and then closes it."""
@@ -70,25 +71,55 @@ class Plot_env():
         time.sleep(duration)  # Wait for the specified duration
         plt.close()  # Close the plot
 
-class Plot_metric():
-    def __init__(self, loss_lists, y_labels=[""], x_labels=[""], titles=[""]):
-        """sets up the plot
+class Plot_metric:
+    def __init__(self, loss_lists, y_labels=None, x_labels=None, titles=None, figsize=(8, 4)):
         """
-        self.loss_lists = loss_lists
-        self.x_labels = x_labels
-        self.y_labels = y_labels
-        self.titles = titles
-        _, self.axs = plt.subplots(nrows=int(np.ceil(len(self.loss_lists)/2)), ncols=2, figsize=(8, 4))
-        plt.ion()
-        # plt.axes().set_aspect('equal')
-        self.redraw(loss_lists)
+        Initialize a dynamic plot in a single figure with multiple subplots.
+        """
+        # Default values for labels and titles
+        y_labels = y_labels if y_labels and len(y_labels) == len(loss_lists) else [""] * len(loss_lists)
+        x_labels = x_labels if x_labels and len(x_labels) == len(loss_lists) else [""] * len(loss_lists)
+        titles = titles if titles and len(titles) == len(loss_lists) else [""] * len(loss_lists)
 
-    def redraw(self, loss_lists): 
-        # plt.clf()
+        # Create subplots
+        nrows = int(np.ceil(len(loss_lists) / 2))  # Number of rows
+        ncols = 2  # Number of columns
+        self.fig, self.ax = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+        self.ax = self.ax.ravel() if isinstance(self.ax, np.ndarray) else [self.ax]  # Flatten to 1D array
+
+        # Initialize lines and data
+        self.lines = {}
+        self.x_data = {}
+        self.y_data = {}
+
         for i in range(len(loss_lists)):
-            self.axs[i].clear()
-            self.axs[i].plot(loss_lists[i], linestyle="-", marker=".")
-            self.axs[i].set_xlabel(self.x_labels[i])
-            self.axs[i].set_ylabel(self.y_labels[i])
-            self.axs[i].set_title(self.titles[i])
-        plt.pause(.0000001)
+            self.ax[i].set_title(titles[i])
+            self.ax[i].set_xlabel(x_labels[i])
+            self.ax[i].set_ylabel(y_labels[i])
+            self.ax[i].grid(True)
+
+            # Initialize line and data
+            self.lines[i], = self.ax[i].plot(range(len(loss_lists[i])), loss_lists[i], label=f"Plot {i+1}")
+            self.x_data[i] = list(range(len(loss_lists[i])))  # Ensure x_data is a list
+            self.y_data[i] = list(loss_lists[i])  # Ensure y_data is a list
+
+        # Hide unused subplots (if any)
+        for j in range(len(loss_lists), len(self.ax)):
+            self.ax[j].axis("off")
+
+    def update(self, ys):
+        """
+        Update the data for the plot and redraw it.
+        
+        Args:
+            x (list of arrays): List of x data for each subplot.
+            y (list of arrays): List of y data for each subplot.
+        """
+        for i, _ in enumerate(self.lines):
+            self.x_data[i] = range(len(ys[i]))  # Ensure x_data is a list
+            self.y_data[i] = ys[i]  # Ensure y_data is a list
+            self.lines[i].set_data(self.x_data[i], self.y_data[i])
+            self.ax[i].relim()  # Recalculate limits
+            self.ax[i].autoscale_view()  # Autoscale the view
+        self.fig.canvas.draw()  # Redraw the figure
+        self.fig.canvas.flush_events()  # Flush GUI events

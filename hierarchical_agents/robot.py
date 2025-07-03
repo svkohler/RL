@@ -71,9 +71,9 @@ class Rob_body():
 
     def restart(self, pos=(0,0), fuel_tank=2000):
         self.rob_x, self.rob_y = pos
-        self.lower.crashed = False
-        self.lower.arrived = False
-        self.lower.fuel = fuel_tank
+        self.robot.crashed = False
+        self.robot.arrived = False
+        self.robot.fuel = fuel_tank
 
     def return_state(self, as_list=False):
         state = {

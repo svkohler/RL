@@ -38,7 +38,7 @@ def generate_double_center_wall():
 
     return BORDER_WALLS.union( {((x_1, (Y_MAX-Y_MIN)*(1-l_1)), (x_1,(Y_MAX-Y_MIN)*l_1))}, {((x_2, (Y_MAX-Y_MIN)*(1-l_2)), (x_1,(Y_MAX-Y_MIN)*l_2))})
 
-def generate_world(mode=["random", "simple"], n_walls=0):
+def generate_world(mode=["random", "simple"], n_walls=0, fuel=300):
 
     if mode == "random":
         walls = generate_random_walls(n_walls)
@@ -66,13 +66,20 @@ def generate_world(mode=["random", "simple"], n_walls=0):
         else:
             goal = candidate_2
             starting_point = candidate_1
+    else:
+        raise ValueError(f"Unsupported mode: {mode}")
 
-    return Rob_world(walls, goal), starting_point
+    w = Rob_world(walls, goal)
+    r = Rob_body(w, init_pos=starting_point, fuel_tank=fuel)
+    w.robot = r
+
+    return w, r
 
 class Rob_world():
-    def __init__(self, walls = {}, goal=(0,0)):
+    def __init__(self, walls = {}, goal=(0,0), robot=None):
         """walls is a set of line segments
                 where each line segment is of the form ((x0,y0),(x1,y1))
         """
         self.walls = walls
         self.goal = goal
+        self.robot = robot
